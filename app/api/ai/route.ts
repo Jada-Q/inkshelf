@@ -6,7 +6,7 @@ const SUPABASE_URL = "https://dhzozfjzhsniyewblwpv.supabase.co";
 const SUPABASE_KEY = "sb_publishable_f_pIVqMK-6ToF3-eYe5n5A_-yb_vpZR";
 
 // Vercel AI Gateway slug（点号版本）；可用 env 覆盖。部署后用 GET /api/ai 实查可用清单后锁定。
-const MODEL = process.env.INKSHELF_AI_MODEL?.trim() || "anthropic/claude-opus-4.6";
+const MODEL = process.env.INKSHELF_AI_MODEL?.trim() || "anthropic/claude-opus-5";
 
 /** 只允许本库登录用户调用——开放的 LLM 端点等于把 Gateway 额度交给全网 */
 async function isAuthed(req: Request): Promise<boolean> {
