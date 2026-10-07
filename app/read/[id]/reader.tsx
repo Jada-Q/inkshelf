@@ -31,8 +31,18 @@ type PdfPage = {
   getViewport: (o: { scale: number }) => { width: number; height: number };
   render: (o: { canvas: HTMLCanvasElement; canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<void> };
 };
-type PdfDoc = { numPages: number; getPage: (n: number) => Promise<PdfPage> };
+type PdfRef = object;
+type PdfOutlineItem = { title: string; dest: string | unknown[] | null };
+type PdfDoc = {
+  numPages: number;
+  getPage: (n: number) => Promise<PdfPage>;
+  getOutline: () => Promise<PdfOutlineItem[] | null>;
+  getDestination: (id: string) => Promise<unknown[] | null>;
+  getPageIndex: (ref: PdfRef) => Promise<number>;
+};
 type PdfTask = { promise: Promise<unknown>; destroy: () => Promise<void> };
+type EpubNavItem = { label: string; href: string; subitems?: EpubNavItem[] };
+type TocEntry = { label: string; target: string; depth: number };
 
 export default function Reader({ id }: { id: string }) {
   const router = useRouter();
@@ -44,6 +54,9 @@ export default function Reader({ id }: { id: string }) {
   const [percent, setPercent] = useState(0);
   const [pageInfo, setPageInfo] = useState("");
   const [saved, setSaved] = useState(true);
+  const [toc, setToc] = useState<TocEntry[]>([]);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [jumpPage, setJumpPage] = useState("");
 
   const epubViewRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -146,6 +159,21 @@ export default function Reader({ id }: { id: string }) {
       await rendition.display(b.position || undefined);
       // locations 用于精确百分比，后台生成
       eb.locations.generate(600).catch(() => {});
+
+      // 目录：epub 导航树拍平两层
+      try {
+        const nav = (await (eb as unknown as { loaded: { navigation: Promise<{ toc: EpubNavItem[] }> } }).loaded.navigation);
+        const entries: TocEntry[] = [];
+        for (const it of nav.toc) {
+          entries.push({ label: it.label.trim(), target: it.href, depth: 0 });
+          for (const sub of it.subitems ?? []) {
+            entries.push({ label: sub.label.trim(), target: sub.href, depth: 1 });
+          }
+        }
+        setToc(entries);
+      } catch {
+        setToc([]);
+      }
     }
 
     async function mountPdf(b: Book, buf: ArrayBuffer) {
@@ -158,6 +186,29 @@ export default function Reader({ id }: { id: string }) {
       const startPage = Math.min(Math.max(parseInt(b.position || "1", 10) || 1, 1), doc.numPages);
       pdfPageRef.current = startPage;
       await renderPdfPage(startPage);
+
+      // 目录：PDF 书签大纲 → 解析到页码（没有大纲则留空，抽屉里走页码跳转）
+      try {
+        const outline = await doc.getOutline();
+        if (outline?.length) {
+          const entries: TocEntry[] = [];
+          for (const it of outline.slice(0, 300)) {
+            let dest = it.dest;
+            if (typeof dest === "string") dest = await doc.getDestination(dest);
+            if (Array.isArray(dest) && dest[0]) {
+              try {
+                const idx = await doc.getPageIndex(dest[0] as PdfRef);
+                entries.push({ label: it.title, target: String(idx + 1), depth: 0 });
+              } catch {
+                /* 单条坏目的地跳过 */
+              }
+            }
+          }
+          setToc(entries);
+        }
+      } catch {
+        setToc([]);
+      }
     }
 
     void Promise.resolve().then(boot);
@@ -210,6 +261,29 @@ export default function Reader({ id }: { id: string }) {
     [book?.format]
   );
 
+  function jumpTo(target: string) {
+    setTocOpen(false);
+    if (book?.format === "epub") {
+      renditionRef.current?.display(target);
+    } else if (pdfDocRef.current) {
+      const n = Math.min(Math.max(parseInt(target, 10) || 1, 1), pdfDocRef.current.numPages);
+      pdfPageRef.current = n;
+      renderPdfPage(n);
+    }
+  }
+
+  /* 触屏滑动翻页 */
+  const touchX = useRef<number | null>(null);
+  function onTouchStart(e: React.TouchEvent) {
+    touchX.current = e.touches[0].clientX;
+  }
+  function onTouchEnd(e: React.TouchEvent) {
+    if (touchX.current === null) return;
+    const dx = e.changedTouches[0].clientX - touchX.current;
+    touchX.current = null;
+    if (Math.abs(dx) > 55) go(dx < 0 ? 1 : -1);
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowRight" || e.key === " ") go(1);
@@ -240,6 +314,7 @@ export default function Reader({ id }: { id: string }) {
           {book ? `${book.title}${book.author ? ` · ${book.author}` : ""}` : "…"}
         </div>
         <div className="reader-tools">
+          <button onClick={() => setTocOpen((v) => !v)} aria-expanded={tocOpen}>目录</button>
           {book?.format === "epub" && (
             <>
               <button onClick={() => setFont(fontIdx - 1)} aria-label="缩小字号">A−</button>
@@ -250,7 +325,7 @@ export default function Reader({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className={`reader-stage ${surface}`}>
+      <div className={`reader-stage ${surface}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         {err ? (
           <div className="center-msg">{err}</div>
         ) : !book ? (
@@ -264,6 +339,49 @@ export default function Reader({ id }: { id: string }) {
         )}
         <div className="nav-zone left" onClick={() => go(-1)} aria-label="上一页" />
         <div className="nav-zone right" onClick={() => go(1)} aria-label="下一页" />
+        <button className="nav-btn left" onClick={() => go(-1)} aria-label="上一页">‹</button>
+        <button className="nav-btn right" onClick={() => go(1)} aria-label="下一页">›</button>
+
+        {tocOpen && (
+          <>
+            <div className="toc-scrim" onClick={() => setTocOpen(false)} />
+            <aside className="toc-drawer">
+              <div className="mono-label blush" style={{ marginBottom: 12 }}>CONTENTS · 目录</div>
+              {toc.length ? (
+                <ul className="toc-list">
+                  {toc.map((t, i) => (
+                    <li key={i} style={{ paddingLeft: t.depth * 14 }}>
+                      <button onClick={() => jumpTo(t.target)}>{t.label}</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="toc-empty">
+                  这本书没有内置目录
+                  {book?.format === "pdf" ? "（PDF 无书签大纲）" : ""}
+                </div>
+              )}
+              {book?.format === "pdf" && (
+                <form
+                  className="toc-jump"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (jumpPage) jumpTo(jumpPage);
+                  }}
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    placeholder="页码"
+                    value={jumpPage}
+                    onChange={(e) => setJumpPage(e.target.value)}
+                  />
+                  <button type="submit">跳转</button>
+                </form>
+              )}
+            </aside>
+          </>
+        )}
       </div>
 
       <div className="reader-foot">

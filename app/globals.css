@@ -162,6 +162,43 @@ input:focus { border-color: var(--blush); }
 
 .center-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--ink-3); font-size: 14px; }
 
+/* visible page-turn buttons (signifier for the invisible tap zones) */
+.nav-btn {
+  position: absolute; top: 50%; transform: translateY(-50%); z-index: 6;
+  width: 34px; height: 56px; padding: 0; border-radius: 6px;
+  font-family: var(--serif); font-size: 24px; line-height: 1;
+  background: rgba(23,21,26,.55); color: #cfc9c0; border: none;
+  opacity: .45; transition: opacity .15s;
+}
+.nav-btn:hover { opacity: 1; color: var(--blush); background: rgba(23,21,26,.8); }
+.nav-btn.left { left: 8px; }
+.nav-btn.right { right: 8px; }
+
+/* TOC drawer */
+.toc-scrim { position: absolute; inset: 0; z-index: 19; background: rgba(0,0,0,.35); }
+.toc-drawer {
+  position: absolute; top: 0; bottom: 0; left: 0; z-index: 20;
+  width: min(320px, 85%); overflow-y: auto;
+  background: var(--bg); border-right: 1px solid var(--line);
+  padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+}
+.toc-list { list-style: none; margin: 0; padding: 0; }
+.toc-list li { margin: 0; }
+.toc-list button {
+  display: block; width: 100%; text-align: left;
+  border: none; border-radius: 0; padding: 9px 6px;
+  font-family: var(--sans); font-size: 13.5px; letter-spacing: 0;
+  text-transform: none; color: var(--ink-2);
+  border-bottom: 1px solid var(--bg-raise);
+}
+.toc-list button:hover { color: var(--blush); }
+.toc-empty { color: var(--ink-3); font-size: 13px; padding: 8px 6px; }
+.toc-jump { display: flex; gap: 8px; margin-top: 14px; }
+.toc-jump input {
+  flex: 1; min-width: 0; background: var(--bg-raise); border: 1px solid var(--line);
+  border-radius: 5px; color: var(--ink); padding: 8px 10px; font-size: 13px;
+}
+
 @media (max-width: 560px) {
   .grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 20px 14px; }
   .shell { padding: 0 16px 60px; }
