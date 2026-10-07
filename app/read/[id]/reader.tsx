@@ -328,6 +328,12 @@ export default function Reader({ id }: { id: string }) {
           acc += dec.decode(value, { stream: true });
           setAiMsgs([...base, { role: "assistant", content: acc }]);
         }
+        if (!acc) {
+          setAiMsgs([
+            ...base,
+            { role: "assistant", content: "AI 服务没有返回内容——通常是 AI Gateway 的额度/绑卡问题，去 Vercel 控制台 AI 页检查后重试。" },
+          ]);
+        }
       } catch {
         setAiMsgs([...base, { role: "assistant", content: "网络出错，请重试" }]);
       } finally {
