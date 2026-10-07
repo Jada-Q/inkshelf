@@ -1,10 +1,9 @@
-@import url("https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&display=swap");
 @import "tailwindcss";
 
-/* ── 墨架 Inkshelf · 方案五「Notion 风 × 墨迹」──
+/* ── 墨架 Inkshelf · 「Notion 骨架 × 目录体」──
    骨架是 Notion：白底、灰线、柔色标签、页面与属性；
-   身份是墨迹：logo / 大标题 / 书名用毛笔楷（Ma Shan Zheng / 行楷），
-   正文与 UI 保持系统无衬线。阅读面默认纯白，夜读可切。 */
+   字体是方案四「目录」的衬线系：Georgia + 宋体/明朝，
+   书名与标题加粗，数字走 Georgia 的老式数字。 */
 
 :root {
   --bg: #ffffff;
@@ -27,8 +26,8 @@
   --night: #191919;
   --night-ink: #d3d1cb;
   --hl: #fdecc8;
-  --brush: "Ma Shan Zheng", "Xingkai SC", "Kaiti SC", "STKaiti", serif;
-  --sans: -apple-system, "PingFang SC", "Hiragino Sans", "Segoe UI", system-ui, sans-serif;
+  --brush: Georgia, "Songti SC", "Hiragino Mincho ProN", "Noto Serif CJK SC", serif;
+  --sans: Georgia, "Songti SC", "Hiragino Mincho ProN", "Noto Serif CJK SC", serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --serif: Georgia, "Songti SC", "Hiragino Mincho ProN", serif;
 }
@@ -43,7 +42,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.brush { font-family: var(--brush); font-weight: 400; }
+.brush { font-family: var(--brush); font-weight: 700; }
 
 .mono-label {
   font-size: 11px;
@@ -82,7 +81,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   display: inline-flex; align-items: center; justify-content: center;
   font-family: var(--brush); font-size: 15px; line-height: 1;
 }
-.side-brand .name { font-family: var(--brush); font-size: 19px; color: var(--ink); }
+.side-brand .name { font-family: var(--brush); font-weight: 700; font-size: 17px; color: var(--ink); }
 .side-item {
   display: block; width: 100%; text-align: left; font-size: 13.5px;
   padding: 5px 8px; border-radius: 4px; color: var(--ink-2); border: none;
@@ -93,7 +92,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
 
 .main { flex: 1; min-width: 0; padding: 40px 48px 80px; max-width: 1060px; }
-.page-title { font-family: var(--brush); font-size: 42px; font-weight: 400; margin: 0 0 18px; line-height: 1.2; }
+.page-title { font-family: var(--brush); font-size: 40px; font-weight: 700; margin: 0 0 18px; line-height: 1.2; }
 
 .view-row {
   display: flex; align-items: center; gap: 4px;
@@ -128,13 +127,13 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 }
 .cover img { height: 100%; width: 100%; object-fit: contain; display: block; padding: 8px 0; }
 .cover .ph {
-  font-family: var(--brush); font-size: 17px; color: #fff; line-height: 1.5;
+  font-family: var(--brush); font-weight: 600; font-size: 14px; color: #fff; line-height: 1.5;
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 12px; text-align: center;
 }
 .card-body { padding: 10px 12px 11px; }
 .card-title {
-  font-family: var(--brush); font-size: 17px; line-height: 1.35; color: var(--ink);
+  font-family: var(--brush); font-weight: 700; font-size: 15.5px; line-height: 1.35; color: var(--ink);
   margin-bottom: 7px; display: block;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -157,7 +156,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   border-bottom: 1px solid var(--line); padding: 6px 10px 6px 2px;
 }
 .db-table td { border-bottom: 1px solid var(--line); padding: 9px 10px 9px 2px; vertical-align: middle; }
-.db-table .t-title { font-family: var(--brush); font-size: 16.5px; }
+.db-table .t-title { font-family: var(--brush); font-weight: 700; font-size: 15.5px; }
 .db-table .t-title a { color: var(--ink); text-decoration: none; }
 .db-table .t-title a:hover { background: var(--bg-hover); border-radius: 3px; }
 .db-table td.num { font-variant-numeric: tabular-nums; color: var(--ink-2); }
@@ -169,7 +168,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   transition: border-color .15s, background .15s;
 }
 .dropzone.over { border-color: var(--blue); background: #f3f9ff; color: var(--ink-2); }
-.dropzone .big { font-family: var(--brush); font-size: 24px; color: var(--ink-2); margin-bottom: 8px; }
+.dropzone .big { font-family: var(--brush); font-weight: 700; font-size: 21px; color: var(--ink-2); margin-bottom: 8px; }
 
 /* ── toast ── */
 .toast {
@@ -183,7 +182,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 /* ── login ── */
 .auth-wrap { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg); }
 .auth-card { width: 340px; max-width: 100%; }
-.auth-card h1 { font-family: var(--brush); font-size: 46px; margin: 6px 0 24px; font-weight: 400; }
+.auth-card h1 { font-family: var(--brush); font-size: 42px; margin: 6px 0 24px; font-weight: 700; letter-spacing: .08em; }
 .auth-card form { display: flex; flex-direction: column; gap: 10px; }
 input[type="email"], input[type="password"] {
   background: var(--bg); border: 1px solid #d3d1cb; border-radius: 5px;
@@ -202,7 +201,7 @@ input:focus { border-color: var(--blue); }
 }
 .reader-top .btn { text-decoration: none; }
 .reader-title {
-  font-family: var(--brush); font-size: 17px; color: var(--ink);
+  font-family: var(--brush); font-weight: 700; font-size: 15px; color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
 }
 .reader-tools { display: flex; gap: 2px; flex-shrink: 0; }
