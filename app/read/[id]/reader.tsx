@@ -151,10 +151,10 @@ export default function Reader({ id }: { id: string }) {
       });
       renditionRef.current = rendition;
       rendition.themes.register("paper", {
-        body: { background: "#fcfaf5", color: "#2a2622", "line-height": "1.85" },
+        body: { background: "#ffffff", color: "#37352f", "line-height": "1.85" },
       });
       rendition.themes.register("night", {
-        body: { background: "#1b1820", color: "#cfc9c0", "line-height": "1.85" },
+        body: { background: "#191919", color: "#d3d1cb", "line-height": "1.85" },
       });
       rendition.themes.select("paper");
       rendition.themes.fontSize(`${FONT_STEPS[1]}%`);
@@ -552,7 +552,7 @@ export default function Reader({ id }: { id: string }) {
           <>
             <div className="toc-scrim" onClick={() => setTocOpen(false)} />
             <aside className="toc-drawer">
-              <div className="mono-label blush" style={{ marginBottom: 12 }}>CONTENTS · 目录</div>
+              <div className="mono-label" style={{ marginBottom: 12 }}>目录</div>
               {toc.length ? (
                 <ul className="toc-list">
                   {toc.map((t, i) => (
@@ -604,7 +604,7 @@ export default function Reader({ id }: { id: string }) {
       {aiOpen && (
         <aside className="ai-panel" aria-label="AI 伴读">
           <div className="ai-head">
-            <span className="mono-label blush">AI COMPANION · 伴读</span>
+            <span className="mono-label blush">AI 伴读</span>
             <button onClick={() => setAiOpen(false)} aria-label="收起">✕</button>
           </div>
           <div className="ai-msgs" ref={aiMsgsRef}>

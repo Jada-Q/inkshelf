@@ -11,12 +11,17 @@ const STATUS_LABEL: Record<Book["status"], string> = {
   want: "想读",
   done: "读完",
 };
+const STATUS_NEXT: Record<Book["status"], Book["status"]> = {
+  want: "reading",
+  reading: "done",
+  done: "want",
+};
 
 /* deterministic placeholder gradient per title */
 function phGradient(title: string) {
   let h = 0;
   for (const c of title) h = (h * 31 + c.charCodeAt(0)) % 360;
-  return `linear-gradient(160deg, hsl(${h} 22% 38%), hsl(${(h + 30) % 360} 26% 22%))`;
+  return `linear-gradient(135deg, hsl(${h} 22% 42%), hsl(${(h + 30) % 360} 26% 26%))`;
 }
 
 type EpubMeta = { title?: string; creator?: string; language?: string };
@@ -28,9 +33,11 @@ export default function ShelfPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [covers, setCovers] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<"all" | Book["status"]>("all");
+  const [view, setView] = useState<"gallery" | "table">("gallery");
   const [toast, setToast] = useState<{ text: string; err?: boolean } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [sideOpen, setSideOpen] = useState(false);
 
   const loadBooks = useCallback(async () => {
     const { data, error } = await supabase
@@ -186,11 +193,21 @@ export default function ShelfPage() {
     else loadBooks();
   }
 
+  async function cycleStatus(b: Book) {
+    const next = STATUS_NEXT[b.status];
+    setBooks((bs) => bs.map((x) => (x.id === b.id ? { ...x, status: next } : x)));
+    const { error } = await supabase.from("inkshelf_books").update({ status: next }).eq("id", b.id);
+    if (error) {
+      setToast({ text: `状态更新失败：${error.message}`, err: true });
+      loadBooks();
+    }
+  }
+
   const shown = filter === "all" ? books : books.filter((b) => b.status === filter);
 
   return (
     <div
-      className="shell"
+      className="ws"
       onDragOver={(e) => {
         e.preventDefault();
         setDragOver(true);
@@ -202,13 +219,18 @@ export default function ShelfPage() {
         if (e.dataTransfer.files.length) importFiles(e.dataTransfer.files);
       }}
     >
-      <div className="topbar">
-        <div className="brand">
-          墨架 <em>Inkshelf</em>
+      <div className={`side-scrim ${sideOpen ? "show" : ""}`} onClick={() => setSideOpen(false)} />
+      <aside className={`side ${sideOpen ? "open" : ""}`}>
+        <div className="side-brand">
+          <span className="glyph">墨</span>
+          <span className="name">墨架</span>
         </div>
-        <div className="topbar-actions">
-          <label className="btn" style={{ cursor: "pointer" }}>
-            ＋ 导入
+        <button className="side-item on">书架</button>
+        <button className="side-item dim" title="M1 再来">笔记本 · 待建</button>
+        <button className="side-item dim" title="M1 再来">阅读统计 · 待建</button>
+        <div className="side-foot">
+          <label className="side-item" style={{ cursor: "pointer" }}>
+            ＋ 导入书
             <input
               type="file"
               accept=".epub,.pdf"
@@ -221,73 +243,132 @@ export default function ShelfPage() {
             />
           </label>
           <button
+            className="side-item"
             onClick={async () => {
               await supabase.auth.signOut();
               router.replace("/login");
             }}
           >
-            退出
+            退出登录
           </button>
         </div>
-      </div>
+      </aside>
 
-      <div className="shelf-head">
-        <span className="mono-label">
-          SHELF · {books.length} {books.length === 1 ? "BOOK" : "BOOKS"}
-        </span>
-        <div className="filters">
-          {(["all", "reading", "want", "done"] as const).map((f) => (
-            <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
-              {f === "all" ? "全部" : STATUS_LABEL[f]}
-            </button>
-          ))}
-        </div>
-      </div>
+      <main className="main">
+        <button className="mobile-menu" onClick={() => setSideOpen(true)}>☰ 菜单</button>
+        <h1 className="page-title">书架</h1>
 
-      {loaded && shown.length === 0 ? (
-        <div className={`dropzone ${dragOver ? "over" : ""}`}>
-          <div className="big">把 PDF / EPUB 拖到这里</div>
-          <div>或点右上角「＋ 导入」——书和进度会同步到你的每台设备</div>
+        <div className="view-row">
+          <button className={`tab ${view === "gallery" ? "on" : ""}`} onClick={() => setView("gallery")}>
+            ⊞ 画廊
+          </button>
+          <button className={`tab ${view === "table" ? "on" : ""}`} onClick={() => setView("table")}>
+            ☰ 表格
+          </button>
+          <span className="spacer" />
+          <div className="filters">
+            {(["all", "reading", "want", "done"] as const).map((f) => (
+              <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
+                {f === "all" ? `全部 ${books.length}` : STATUS_LABEL[f]}
+              </button>
+            ))}
+          </div>
         </div>
-      ) : (
-        <div className="grid">
-          {shown.map((b) => (
-            <div key={b.id} className="book-card" style={{ position: "relative" }}>
-              <Link href={`/read/${b.id}`} aria-label={`打开《${b.title}》`}>
-                <div className="cover">
-                  {b.cover_path && covers[b.cover_path] ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={covers[b.cover_path]} alt="" />
-                  ) : (
-                    <div className="ph" style={{ background: phGradient(b.title) }}>
-                      {b.title}
+
+        {loaded && shown.length === 0 ? (
+          <div className={`dropzone ${dragOver ? "over" : ""}`}>
+            <div className="big">把 PDF / EPUB 拖到这里</div>
+            <div>或点侧栏「＋ 导入书」——书和进度会同步到你的每台设备</div>
+          </div>
+        ) : view === "gallery" ? (
+          <div className="grid">
+            {shown.map((b) => (
+              <div key={b.id} className="book-card">
+                <Link href={`/read/${b.id}`} className="card-in" aria-label={`打开《${b.title}》`}>
+                  <div className="cover">
+                    {b.cover_path && covers[b.cover_path] ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={covers[b.cover_path]} alt="" />
+                    ) : (
+                      <div className="ph" style={{ background: phGradient(b.title) }}>
+                        {b.title}
+                      </div>
+                    )}
+                  </div>
+                  <div className="card-body">
+                    <span className="card-title">{b.title}</span>
+                    <div className="card-props">
+                      <button
+                        className={`tag ${b.status}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          cycleStatus(b);
+                        }}
+                        title="点击切换状态"
+                      >
+                        {STATUS_LABEL[b.status]}
+                      </button>
+                      <span className="pct">{Math.round(b.percent * 100)}%</span>
                     </div>
-                  )}
-                </div>
-              </Link>
-              <div className="prog">
-                <i style={{ width: `${Math.round(b.percent * 100)}%` }} />
+                    <div className="prog">
+                      <i style={{ width: `${Math.round(b.percent * 100)}%` }} />
+                    </div>
+                    <div className="card-meta">
+                      <span>{b.author ?? b.format.toUpperCase()}</span>
+                      <button
+                        className="rm"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          removeBook(b);
+                        }}
+                      >
+                        移除
+                      </button>
+                    </div>
+                  </div>
+                </Link>
               </div>
-              <div className="bmeta">
-                <b>{b.title}</b>
-                {b.author ? `${b.author} · ` : ""}
-                {Math.round(b.percent * 100)}% · {STATUS_LABEL[b.status]}
-                {" · "}
-                <button
-                  style={{ border: "none", padding: 0, fontSize: "10px" }}
-                  onClick={() => removeBook(b)}
-                >
-                  移除
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        ) : (
+          <table className="db-table">
+            <thead>
+              <tr>
+                <th>书名</th>
+                <th>作者</th>
+                <th>状态</th>
+                <th>进度</th>
+                <th>格式</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((b) => (
+                <tr key={b.id}>
+                  <td className="t-title">
+                    <Link href={`/read/${b.id}`}>{b.title}</Link>
+                  </td>
+                  <td style={{ color: "var(--ink-2)" }}>{b.author ?? "—"}</td>
+                  <td>
+                    <button className={`tag ${b.status}`} onClick={() => cycleStatus(b)}>
+                      {STATUS_LABEL[b.status]}
+                    </button>
+                  </td>
+                  <td className="num">{Math.round(b.percent * 100)}%</td>
+                  <td className="num">{b.format.toUpperCase()}</td>
+                  <td>
+                    <button className="rm" style={{ fontSize: 12 }} onClick={() => removeBook(b)}>
+                      移除
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </main>
 
-      {dragOver && books.length > 0 && (
-        <div className="toast">松手即上架 (.epub / .pdf)</div>
-      )}
+      {dragOver && books.length > 0 && <div className="toast">松手即上架 (.epub / .pdf)</div>}
       {toast && <div className={`toast ${toast.err ? "err" : ""}`}>{toast.text}</div>}
     </div>
   );

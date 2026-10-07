@@ -40,7 +40,7 @@ export default function LoginPage() {
   return (
     <div className="auth-wrap">
       <div className="auth-card">
-        <div className="mono-label blush">INKSHELF · PRIVATE LIBRARY</div>
+        <div className="mono-label">私人图书馆 · Inkshelf</div>
         <h1>墨架</h1>
         <form onSubmit={submit}>
           <input

@@ -8,12 +8,12 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "墨架",
-    statusBarStyle: "black-translucent",
+    statusBarStyle: "default",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#17151a",
+  themeColor: "#ffffff",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
