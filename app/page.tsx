@@ -4,20 +4,15 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
+import { useI18n, LangSwitch } from "@/lib/i18n";
 
 const BUCKET = "inkshelf-books";
-const STATUS_LABEL: Record<Book["status"], string> = {
-  reading: "在读",
-  want: "想读",
-  done: "读完",
-};
 const STATUS_NEXT: Record<Book["status"], Book["status"]> = {
   want: "reading",
   reading: "done",
   done: "want",
 };
 
-/* deterministic placeholder gradient per title */
 function phGradient(title: string) {
   let h = 0;
   for (const c of title) h = (h * 31 + c.charCodeAt(0)) % 360;
@@ -29,6 +24,7 @@ type PdfInfo = { Title?: string; Author?: string };
 
 export default function ShelfPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [uid, setUid] = useState<string | null>(null);
   const [books, setBooks] = useState<Book[]>([]);
   const [covers, setCovers] = useState<Record<string, string>>({});
@@ -45,7 +41,7 @@ export default function ShelfPage() {
       .select("*")
       .order("updated_at", { ascending: false });
     if (error) {
-      setToast({ text: `读取书架失败：${error.message}`, err: true });
+      setToast({ text: error.message, err: true });
       return;
     }
     const list = (data ?? []) as Book[];
@@ -135,10 +131,10 @@ export default function ShelfPage() {
           ? "pdf"
           : null;
       if (!ext) {
-        setToast({ text: `${file.name}：只支持 .epub / .pdf`, err: true });
+        setToast({ text: t("t_badfmt", { name: file.name }), err: true });
         continue;
       }
-      setToast({ text: `正在上架 ${file.name} …` });
+      setToast({ text: t("t_importing", { name: file.name }) });
       try {
         const buf = await file.arrayBuffer();
         const meta = ext === "epub" ? await parseEpub(buf) : await parsePdf(buf);
@@ -148,7 +144,7 @@ export default function ShelfPage() {
         const { error: upErr } = await supabase.storage.from(BUCKET).upload(filePath, file, {
           contentType: ext === "epub" ? "application/epub+zip" : "application/pdf",
         });
-        if (upErr) throw new Error(`上传失败：${upErr.message}`);
+        if (upErr) throw new Error(upErr.message);
 
         let coverPath: string | null = null;
         if (meta.cover) {
@@ -156,13 +152,14 @@ export default function ShelfPage() {
           const { error: cvErr } = await supabase.storage
             .from(BUCKET)
             .upload(coverPath, meta.cover, { contentType: "image/jpeg" });
-          if (cvErr) coverPath = null; // 封面失败不拦上架
+          if (cvErr) coverPath = null;
         }
 
+        const title = meta.title?.trim() || file.name.replace(/\.(epub|pdf)$/i, "");
         const { error: insErr } = await supabase.from("inkshelf_books").insert({
           id: bookId,
           owner: uid,
-          title: meta.title?.trim() || file.name.replace(/\.(epub|pdf)$/i, ""),
+          title,
           author: meta.author?.trim() || null,
           format: ext,
           file_path: filePath,
@@ -170,13 +167,13 @@ export default function ShelfPage() {
           language: meta.language || null,
           file_size: file.size,
         });
-        if (insErr) throw new Error(`入库失败：${insErr.message}`);
+        if (insErr) throw new Error(insErr.message);
 
-        setToast({ text: `《${meta.title?.trim() || file.name}》已上架` });
+        setToast({ text: t("t_shelved", { title }) });
         await loadBooks();
       } catch (err) {
         setToast({
-          text: `${file.name}：${err instanceof Error ? err.message : "导入失败"}`,
+          text: `${file.name}: ${err instanceof Error ? err.message : "error"}`,
           err: true,
         });
       }
@@ -185,11 +182,11 @@ export default function ShelfPage() {
   }
 
   async function removeBook(b: Book) {
-    if (!window.confirm(`把《${b.title}》从书架移除？文件会一并删除。`)) return;
+    if (!window.confirm(t("remove") + " 《" + b.title + "》?")) return;
     const paths = [b.file_path, ...(b.cover_path ? [b.cover_path] : [])];
     await supabase.storage.from(BUCKET).remove(paths);
     const { error } = await supabase.from("inkshelf_books").delete().eq("id", b.id);
-    if (error) setToast({ text: `删除失败：${error.message}`, err: true });
+    if (error) setToast({ text: error.message, err: true });
     else loadBooks();
   }
 
@@ -198,7 +195,7 @@ export default function ShelfPage() {
     setBooks((bs) => bs.map((x) => (x.id === b.id ? { ...x, status: next } : x)));
     const { error } = await supabase.from("inkshelf_books").update({ status: next }).eq("id", b.id);
     if (error) {
-      setToast({ text: `状态更新失败：${error.message}`, err: true });
+      setToast({ text: error.message, err: true });
       loadBooks();
     }
   }
@@ -223,14 +220,15 @@ export default function ShelfPage() {
       <aside className={`side ${sideOpen ? "open" : ""}`}>
         <div className="side-brand">
           <span className="glyph">墨</span>
-          <span className="name">墨架</span>
+          <span className="name">{t("brand")}</span>
         </div>
-        <button className="side-item on">书架</button>
-        <button className="side-item dim" title="M1 再来">笔记本 · 待建</button>
-        <Link href="/stats" className="side-item">阅读统计</Link>
+        <button className="side-item on">{t("nav_shelf")}</button>
+        <button className="side-item dim">{t("nav_notes")}</button>
+        <Link href="/stats" className="side-item">{t("nav_stats")}</Link>
         <div className="side-foot">
+          <LangSwitch />
           <label className="side-item" style={{ cursor: "pointer" }}>
-            ＋ 导入书
+            {t("import")}
             <input
               type="file"
               accept=".epub,.pdf"
@@ -249,27 +247,27 @@ export default function ShelfPage() {
               router.replace("/login");
             }}
           >
-            退出登录
+            {t("signout")}
           </button>
         </div>
       </aside>
 
       <main className="main">
-        <button className="mobile-menu" onClick={() => setSideOpen(true)}>☰ 菜单</button>
-        <h1 className="page-title">书架</h1>
+        <button className="mobile-menu" onClick={() => setSideOpen(true)}>{t("menu")}</button>
+        <h1 className="page-title">{t("nav_shelf")}</h1>
 
         <div className="view-row">
           <button className={`tab ${view === "gallery" ? "on" : ""}`} onClick={() => setView("gallery")}>
-            ⊞ 画廊
+            {t("view_gallery")}
           </button>
           <button className={`tab ${view === "table" ? "on" : ""}`} onClick={() => setView("table")}>
-            ☰ 表格
+            {t("view_table")}
           </button>
           <span className="spacer" />
           <div className="filters">
             {(["all", "reading", "want", "done"] as const).map((f) => (
               <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
-                {f === "all" ? `全部 ${books.length}` : STATUS_LABEL[f]}
+                {f === "all" ? `${t("all")} ${books.length}` : t(f)}
               </button>
             ))}
           </div>
@@ -277,14 +275,14 @@ export default function ShelfPage() {
 
         {loaded && shown.length === 0 ? (
           <div className={`dropzone ${dragOver ? "over" : ""}`}>
-            <div className="big">把 PDF / EPUB 拖到这里</div>
-            <div>或点侧栏「＋ 导入书」——书和进度会同步到你的每台设备</div>
+            <div className="big">{t("drop_big")}</div>
+            <div>{t("drop_sub")}</div>
           </div>
         ) : view === "gallery" ? (
           <div className="grid">
             {shown.map((b) => (
               <div key={b.id} className="book-card">
-                <Link href={`/read/${b.id}`} className="card-in" aria-label={`打开《${b.title}》`}>
+                <Link href={`/read/${b.id}`} className="card-in" aria-label={b.title}>
                   <div className="cover">
                     {b.cover_path && covers[b.cover_path] ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -304,9 +302,9 @@ export default function ShelfPage() {
                           e.preventDefault();
                           cycleStatus(b);
                         }}
-                        title="点击切换状态"
+                        title={t("switch_status")}
                       >
-                        {STATUS_LABEL[b.status]}
+                        {t(b.status)}
                       </button>
                       <span className="pct">{Math.round(b.percent * 100)}%</span>
                     </div>
@@ -322,7 +320,7 @@ export default function ShelfPage() {
                           removeBook(b);
                         }}
                       >
-                        移除
+                        {t("remove")}
                       </button>
                     </div>
                   </div>
@@ -334,11 +332,11 @@ export default function ShelfPage() {
           <table className="db-table">
             <thead>
               <tr>
-                <th>书名</th>
-                <th>作者</th>
-                <th>状态</th>
-                <th>进度</th>
-                <th>格式</th>
+                <th>{t("c_title")}</th>
+                <th>{t("c_author")}</th>
+                <th>{t("c_status")}</th>
+                <th>{t("c_progress")}</th>
+                <th>{t("c_format")}</th>
                 <th></th>
               </tr>
             </thead>
@@ -351,14 +349,14 @@ export default function ShelfPage() {
                   <td style={{ color: "var(--ink-2)" }}>{b.author ?? "—"}</td>
                   <td>
                     <button className={`tag ${b.status}`} onClick={() => cycleStatus(b)}>
-                      {STATUS_LABEL[b.status]}
+                      {t(b.status)}
                     </button>
                   </td>
                   <td className="num">{Math.round(b.percent * 100)}%</td>
                   <td className="num">{b.format.toUpperCase()}</td>
                   <td>
                     <button className="rm" style={{ fontSize: 12 }} onClick={() => removeBook(b)}>
-                      移除
+                      {t("remove")}
                     </button>
                   </td>
                 </tr>
@@ -368,7 +366,7 @@ export default function ShelfPage() {
         )}
       </main>
 
-      {dragOver && books.length > 0 && <div className="toast">松手即上架 (.epub / .pdf)</div>}
+      {dragOver && books.length > 0 && <div className="toast">{t("drop_toast")}</div>}
       {toast && <div className={`toast ${toast.err ? "err" : ""}`}>{toast.text}</div>}
     </div>
   );

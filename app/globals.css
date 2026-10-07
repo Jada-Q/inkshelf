@@ -311,6 +311,16 @@ input:focus { border-color: var(--blue); }
 .ai-input button { flex-shrink: 0; }
 button.speaking { color: var(--ai); background: var(--ai-soft); }
 
+/* ── language switcher ── */
+.lang-switch {
+  font-family: var(--sans); font-size: 13px; color: var(--ink-2);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 4px 8px; cursor: pointer;
+}
+.lang-switch:hover { border-color: var(--ink-3); }
+.lang-switch.compact { font-size: 12px; padding: 4px 6px; }
+.side-foot .lang-switch { width: 100%; margin-bottom: 2px; }
+
 /* ── stats page ── */
 .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 36px; }
 @media (max-width: 560px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }

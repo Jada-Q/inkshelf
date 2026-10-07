@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
+import { useI18n, LangSwitch } from "@/lib/i18n";
 
 const BUCKET = "inkshelf-books";
 const FONT_STEPS = [90, 100, 115, 130, 150];
@@ -52,6 +53,7 @@ type TocEntry = { label: string; target: string; depth: number };
 
 export default function Reader({ id }: { id: string }) {
   const router = useRouter();
+  const { t, locale } = useI18n();
 
   const [book, setBook] = useState<Book | null>(null);
   const [err, setErr] = useState("");
@@ -122,7 +124,7 @@ export default function Reader({ id }: { id: string }) {
       lastActRef.current = Date.now();
       const { data, error } = await supabase.from("inkshelf_books").select("*").eq("id", id).single();
       if (error || !data) {
-        setErr("找不到这本书");
+        setErr(t("notfound"));
         return;
       }
       const b = data as Book;
@@ -362,6 +364,7 @@ export default function Reader({ id }: { id: string }) {
           body: JSON.stringify({
             bookTitle: book?.title,
             author: book?.author,
+            locale,
             messages: base,
           }),
         });
@@ -390,7 +393,7 @@ export default function Reader({ id }: { id: string }) {
         setAiBusy(false);
       }
     },
-    [aiMsgs, book?.title, book?.author]
+    [aiMsgs, book?.title, book?.author, locale]
   );
 
   function quickAsk(kind: "explain" | "translate" | "ask") {
@@ -595,27 +598,28 @@ export default function Reader({ id }: { id: string }) {
     <div className="reader-shell">
       <div className="reader-top">
         <Link href="/" className="btn" style={{ textDecoration: "none", flexShrink: 0 }}>
-          ← 书架
+          {t("back")}
         </Link>
         <div className="reader-title">
           {book ? `${book.title}${book.author ? ` · ${book.author}` : ""}` : "…"}
         </div>
         <div className="reader-tools">
-          <button onClick={() => setTocOpen((v) => !v)} aria-expanded={tocOpen}>目录</button>
+          <button onClick={() => setTocOpen((v) => !v)} aria-expanded={tocOpen}>{t("toc")}</button>
           {book?.format === "epub" && (
             <>
-              <button onClick={() => setFont(fontIdx - 1)} aria-label="缩小字号">A−</button>
-              <button onClick={() => setFont(fontIdx + 1)} aria-label="放大字号">A+</button>
+              <button onClick={() => setFont(fontIdx - 1)} aria-label="A−">A−</button>
+              <button onClick={() => setFont(fontIdx + 1)} aria-label="A+">A+</button>
             </>
           )}
           {book?.format === "pdf" && (
-            <button onClick={askAboutPdfPage} disabled={aiBusy}>问AI·本页</button>
+            <button onClick={askAboutPdfPage} disabled={aiBusy}>{t("ai_page")}</button>
           )}
           <button onClick={speakToggle} className={speaking ? "speaking" : ""}>
-            {speaking ? "停" : "朗读"}
+            {speaking ? t("stop") : t("read_aloud")}
           </button>
-          <button onClick={() => setAiOpen((v) => !v)} aria-expanded={aiOpen}>AI</button>
-          <button onClick={toggleSurface}>{surface === "paper" ? "夜" : "纸"}</button>
+          <button onClick={() => setAiOpen((v) => !v)} aria-expanded={aiOpen}>{t("ai")}</button>
+          <button onClick={toggleSurface}>{surface === "paper" ? t("night") : t("paper")}</button>
+          <LangSwitch compact />
         </div>
       </div>
 
@@ -623,7 +627,7 @@ export default function Reader({ id }: { id: string }) {
         {err ? (
           <div className="center-msg">{err}</div>
         ) : !book ? (
-          <div className="center-msg">取书中…</div>
+          <div className="center-msg">{t("getting")}</div>
         ) : null}
         {book?.format === "epub" && <div id="epub-view" ref={epubViewRef} />}
         {book?.format === "pdf" && (
@@ -640,7 +644,7 @@ export default function Reader({ id }: { id: string }) {
           <>
             <div className="toc-scrim" onClick={() => setTocOpen(false)} />
             <aside className="toc-drawer">
-              <div className="mono-label" style={{ marginBottom: 12 }}>目录</div>
+              <div className="mono-label" style={{ marginBottom: 12 }}>{t("toc")}</div>
               {toc.length ? (
                 <ul className="toc-list">
                   {toc.map((t, i) => (
@@ -651,8 +655,8 @@ export default function Reader({ id }: { id: string }) {
                 </ul>
               ) : (
                 <div className="toc-empty">
-                  这本书没有内置目录
-                  {book?.format === "pdf" ? "（PDF 无书签大纲）" : ""}
+                  {t("toc_empty")}
+                  {book?.format === "pdf" ? t("toc_pdf") : ""}
                 </div>
               )}
               {book?.format === "pdf" && (
@@ -666,11 +670,11 @@ export default function Reader({ id }: { id: string }) {
                   <input
                     type="number"
                     min={1}
-                    placeholder="页码"
+                    placeholder={t("pageno")}
                     value={jumpPage}
                     onChange={(e) => setJumpPage(e.target.value)}
                   />
-                  <button type="submit">跳转</button>
+                  <button type="submit">{t("jump")}</button>
                 </form>
               )}
             </aside>
@@ -681,10 +685,10 @@ export default function Reader({ id }: { id: string }) {
       {selText && (
         <div className="sel-actions" role="toolbar" aria-label="选段操作">
           <span className="sel-quote">「{selText.slice(0, 40)}{selText.length > 40 ? "…" : ""}」</span>
-          <button onClick={() => quickAsk("explain")}>解释</button>
-          <button onClick={() => quickAsk("translate")}>翻译</button>
-          <button onClick={() => quickAsk("ask")}>问AI</button>
-          <button onClick={speakSelection}>朗读</button>
+          <button onClick={() => quickAsk("explain")}>{t("explain")}</button>
+          <button onClick={() => quickAsk("translate")}>{t("translate")}</button>
+          <button onClick={() => quickAsk("ask")}>{t("ask_ai")}</button>
+          <button onClick={speakSelection}>{t("read_aloud")}</button>
           <button onClick={() => setSelText("")} aria-label="关闭">✕</button>
         </div>
       )}
@@ -692,15 +696,13 @@ export default function Reader({ id }: { id: string }) {
       {aiOpen && (
         <aside className="ai-panel" aria-label="AI 伴读">
           <div className="ai-head">
-            <span className="mono-label blush">AI 伴读</span>
+            <span className="mono-label blush">{t("ai_companion")}</span>
             <button onClick={() => setAiOpen(false)} aria-label="收起">✕</button>
           </div>
           <div className="ai-msgs" ref={aiMsgsRef}>
             {aiMsgs.length === 0 && (
               <div className="ai-hint">
-                {book?.format === "epub"
-                  ? "在正文里选中一段文字，就会弹出「解释 / 翻译 / 问AI」；也可以直接在下面提问。"
-                  : "点顶栏「问AI·本页」讲解当前页，或直接在下面提问。"}
+                {book?.format === "epub" ? t("ai_hint_epub") : t("ai_hint_pdf")}
               </div>
             )}
             {aiMsgs.map((m, i) => (
@@ -722,20 +724,20 @@ export default function Reader({ id }: { id: string }) {
             <input
               value={aiInput}
               onChange={(e) => setAiInput(e.target.value)}
-              placeholder="问这本书的任何问题…"
+              placeholder={t("ai_ph")}
             />
             {srCtor && (
               <button
                 type="button"
                 onClick={startDictation}
                 className={listening ? "speaking" : ""}
-                aria-label="语音输入"
+                aria-label={t("say")}
               >
-                {listening ? "听…" : "说"}
+                {listening ? t("listening") : t("say")}
               </button>
             )}
             <button type="submit" className="primary" disabled={aiBusy}>
-              {aiBusy ? "…" : "发送"}
+              {aiBusy ? "…" : t("send")}
             </button>
           </form>
         </aside>
@@ -746,13 +748,13 @@ export default function Reader({ id }: { id: string }) {
         <span>
           {liveSecs > 0 && (
             <>
-              本次 {liveSecs < 60 ? `${liveSecs} 秒` : `${Math.floor(liveSecs / 60)} 分`}
+              {t("this_time")} {liveSecs < 60 ? `${liveSecs} ${t("sec")}` : `${Math.floor(liveSecs / 60)} ${t("min")}`}
               {" · "}
             </>
           )}
           <span className="pct">{Math.round(percent * 100)}%</span>
           {" · "}
-          {saved ? "已同步" : "保存中…"}
+          {saved ? t("synced") : t("saving")}
         </span>
       </div>
     </div>

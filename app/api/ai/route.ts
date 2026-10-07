@@ -27,18 +27,29 @@ export async function POST(req: Request) {
   const body = (await req.json()) as {
     bookTitle?: string;
     author?: string;
+    locale?: string;
     messages?: ChatMsg[];
   };
   const messages = (body.messages ?? []).slice(-16); // 控制上下文长度
   if (!messages.length) return new Response("empty", { status: 400 });
 
+  const LANG: Record<string, string> = {
+    zh: "Chinese (中文)",
+    ja: "Japanese (日本語)",
+    ko: "Korean (한국어)",
+    en: "English",
+    fr: "French (français)",
+    es: "Spanish (español)",
+  };
+  const answerLang = LANG[body.locale ?? "zh"] ?? "the user's UI language";
+
   const system = [
-    "你是「墨架」私人图书馆的阅读伴读。读者正在读一本书，会把选段或问题发给你。",
-    body.bookTitle ? `当前书目：《${body.bookTitle}》${body.author ? `，作者 ${body.author}` : ""}。` : "",
-    "规则：默认用中文回答（读者明确要求其他语言除外）；紧扣选段和这本书的语境；",
-    "解释要讲到点子上——给高层理解和关键脉络，不逐句复述原文；",
-    "翻译时先给译文，再用一两句点出不易直译的关键词；",
-    "回答保持精炼，优先回应问题本身，不加免责声明和客套。",
+    "You are the reading companion inside the personal library app Inkshelf. The reader is reading a book and sends you a passage or a question.",
+    body.bookTitle ? `Current book: "${body.bookTitle}"${body.author ? ` by ${body.author}` : ""}.` : "",
+    `Answer in ${answerLang} unless the reader explicitly asks for another language.`,
+    "Stay anchored to the passage and this book's context; for explanations give the high-level understanding and key threads rather than restating the text line by line.",
+    "When translating, give the translation first, then a sentence or two on the terms that don't translate cleanly.",
+    "Keep answers concise and address the question directly — no disclaimers or filler.",
   ]
     .filter(Boolean)
     .join("\n");

@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
+import { useI18n, LangSwitch } from "@/lib/i18n";
 
 type Sess = { started_at: string; seconds: number };
 type Day = { key: string; date: Date; secs: number } | null;
+type T = (k: string, p?: Record<string, string>) => string;
 
 const DOW = ["日", "一", "二", "三", "四", "五", "六"];
 const HEAT = ["#ebebe9", "#cfe3f3", "#9ecbe9", "#5ba6da", "#2383e2"];
@@ -17,17 +19,18 @@ function dayKey(d: Date) {
 function startOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
-function fmt(secs: number) {
-  if (secs < 60) return `${secs} 秒`;
+function fmt(secs: number, t: T) {
+  if (secs < 60) return `${secs} ${t("sec")}`;
   const m = Math.round(secs / 60);
-  if (m < 60) return `${m} 分`;
+  if (m < 60) return `${m} ${t("min")}`;
   const h = Math.floor(m / 60);
   const rem = m % 60;
-  return rem ? `${h} 小时 ${rem} 分` : `${h} 小时`;
+  return rem ? `${h} ${t("hours")} ${rem} ${t("min")}` : `${h} ${t("hours")}`;
 }
 
 export default function StatsPage() {
   const router = useRouter();
+  const { t } = useI18n();
   const [loaded, setLoaded] = useState(false);
   const [books, setBooks] = useState<Book[]>([]);
   const [dayMap, setDayMap] = useState<Record<string, number>>({});
@@ -71,12 +74,13 @@ export default function StatsPage() {
       <aside className={`side ${sideOpen ? "open" : ""}`}>
         <div className="side-brand">
           <span className="glyph">墨</span>
-          <span className="name">墨架</span>
+          <span className="name">{t("brand")}</span>
         </div>
-        <Link href="/" className="side-item">书架</Link>
-        <button className="side-item dim" title="M1 再来">笔记本 · 待建</button>
-        <button className="side-item on">阅读统计</button>
+        <Link href="/" className="side-item">{t("nav_shelf")}</Link>
+        <button className="side-item dim">{t("nav_notes")}</button>
+        <button className="side-item on">{t("nav_stats")}</button>
         <div className="side-foot">
+          <LangSwitch />
           <button
             className="side-item"
             onClick={async () => {
@@ -84,16 +88,16 @@ export default function StatsPage() {
               router.replace("/login");
             }}
           >
-            退出登录
+            {t("signout")}
           </button>
         </div>
       </aside>
 
       <main className="main">
-        <button className="mobile-menu" onClick={() => setSideOpen(true)}>☰ 菜单</button>
-        <h1 className="page-title">阅读统计</h1>
+        <button className="mobile-menu" onClick={() => setSideOpen(true)}>{t("menu")}</button>
+        <h1 className="page-title">{t("stats")}</h1>
         {!loaded ? (
-          <div style={{ color: "var(--ink-3)", padding: "20px 0" }}>统计中…</div>
+          <div style={{ color: "var(--ink-3)", padding: "20px 0" }}>{t("computing")}</div>
         ) : (
           <StatsBody books={books} dayMap={dayMap} />
         )}
@@ -102,8 +106,8 @@ export default function StatsPage() {
   );
 }
 
-/* 日期相关计算只在数据加载后（客户端）运行，避免 PPR 预渲染时读取当前时间 */
 function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, number> }) {
+  const { t } = useI18n();
   const now = new Date();
   const today0 = startOfDay(now);
 
@@ -125,13 +129,12 @@ function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, nu
   if (allSecs === 0) {
     return (
       <div className="dropzone">
-        <div className="big">还没有阅读记录</div>
-        <div>去书架打开一本书读一会儿，计时会自动开始（挂机和切后台不计）。</div>
+        <div className="big">{t("no_rec_big")}</div>
+        <div>{t("no_rec_sub")}</div>
       </div>
     );
   }
 
-  // 热力图：最近 18 周，列=周 行=周日..周六
   const WEEKS = 18;
   const total = WEEKS * 7;
   const flat: Day[] = [];
@@ -160,24 +163,24 @@ function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, nu
       <div className="stat-row">
         <div className="stat-cell">
           <div className="stat-num">{streak}</div>
-          <div className="stat-lab">连续天数</div>
+          <div className="stat-lab">{t("streak")}</div>
         </div>
         <div className="stat-cell">
-          <div className="stat-num">{fmt(monthSecs)}</div>
-          <div className="stat-lab">本月阅读</div>
+          <div className="stat-num">{fmt(monthSecs, t)}</div>
+          <div className="stat-lab">{t("month")}</div>
         </div>
         <div className="stat-cell">
-          <div className="stat-num">{fmt(allSecs)}</div>
-          <div className="stat-lab">累计阅读</div>
+          <div className="stat-num">{fmt(allSecs, t)}</div>
+          <div className="stat-lab">{t("total")}</div>
         </div>
         <div className="stat-cell">
           <div className="stat-num">{daysRead}</div>
-          <div className="stat-lab">阅读天数</div>
+          <div className="stat-lab">{t("days")}</div>
         </div>
       </div>
 
       <section className="stat-sec">
-        <h2 className="stat-h2">最近 18 周</h2>
+        <h2 className="stat-h2">{t("weeks18")}</h2>
         <div className="heat-wrap">
           <div className="heat-dow">
             {DOW.map((d, i) => (
@@ -194,7 +197,7 @@ function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, nu
                       key={ri}
                       className="heat-cell"
                       style={{ background: cell ? heatColor(cell.secs) : "transparent" }}
-                      title={cell ? `${cell.key}：${cell.secs > 0 ? fmt(cell.secs) : "未读"}` : ""}
+                      title={cell ? `${cell.key}: ${cell.secs > 0 ? fmt(cell.secs, t) : t("unread")}` : ""}
                     />
                   );
                 })}
@@ -203,16 +206,16 @@ function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, nu
           </div>
         </div>
         <div className="heat-legend">
-          <span>少</span>
+          <span>{t("less")}</span>
           {HEAT.map((c, i) => (
             <span key={i} className="heat-cell" style={{ background: c }} />
           ))}
-          <span>多</span>
+          <span>{t("more")}</span>
         </div>
       </section>
 
       <section className="stat-sec">
-        <h2 className="stat-h2">每本书</h2>
+        <h2 className="stat-h2">{t("per_book")}</h2>
         <div className="book-times">
           {books
             .filter((b) => (b.total_seconds ?? 0) > 0)
@@ -222,7 +225,7 @@ function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, nu
                 <span className="bt-bar">
                   <i style={{ width: `${Math.max(4, ((b.total_seconds ?? 0) / maxBook) * 100)}%` }} />
                 </span>
-                <span className="bt-num">{fmt(b.total_seconds ?? 0)}</span>
+                <span className="bt-num">{fmt(b.total_seconds ?? 0, t)}</span>
               </Link>
             ))}
         </div>
