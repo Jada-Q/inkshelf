@@ -8,11 +8,13 @@ import { supabase, type Book } from "@/lib/supabase";
 const BUCKET = "inkshelf-books";
 const FONT_STEPS = [90, 100, 115, 130, 150];
 
+type EpubContents = { window: Window };
 type EpubRendition = {
   display: (target?: string) => Promise<void>;
   prev: () => void;
   next: () => void;
-  on: (event: string, cb: (loc: EpubLocation) => void) => void;
+  on(event: "relocated", cb: (loc: EpubLocation) => void): void;
+  on(event: "selected", cb: (cfiRange: string, contents: EpubContents) => void): void;
   themes: {
     register: (name: string, rules: Record<string, Record<string, string>>) => void;
     select: (name: string) => void;
@@ -27,7 +29,9 @@ type EpubBook = {
   locations: { generate: (chars: number) => Promise<unknown>; percentageFromCfi: (cfi: string) => number; length: () => number };
   destroy: () => void;
 };
+type PdfTextItem = { str?: string };
 type PdfPage = {
+  getTextContent: () => Promise<{ items: PdfTextItem[] }>;
   getViewport: (o: { scale: number }) => { width: number; height: number };
   render: (o: { canvas: HTMLCanvasElement; canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<void> };
 };
@@ -57,6 +61,16 @@ export default function Reader({ id }: { id: string }) {
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [tocOpen, setTocOpen] = useState(false);
   const [jumpPage, setJumpPage] = useState("");
+
+  /* ── M2: AI 伴读 + 朗读 ── */
+  const [selText, setSelText] = useState("");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiMsgs, setAiMsgs] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [aiInput, setAiInput] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
+  const speakAliveRef = useRef(false);
+  const aiMsgsRef = useRef<HTMLDivElement>(null);
 
   const epubViewRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -145,6 +159,11 @@ export default function Reader({ id }: { id: string }) {
       rendition.themes.select("paper");
       rendition.themes.fontSize(`${FONT_STEPS[1]}%`);
 
+      rendition.on("selected", (_cfiRange: string, contents: EpubContents) => {
+        const t = contents.window.getSelection()?.toString().trim() ?? "";
+        if (t) setSelText(t);
+      });
+
       rendition.on("relocated", (loc: EpubLocation) => {
         const cfi = loc.start.cfi;
         let pct = loc.start.percentage ?? 0;
@@ -215,6 +234,8 @@ export default function Reader({ id }: { id: string }) {
     return () => {
       cancelled = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      speakAliveRef.current = false;
+      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
       renditionRef.current?.destroy();
       epubBookRef.current?.destroy();
       pdfTaskRef.current?.destroy().catch(() => {});
@@ -272,6 +293,178 @@ export default function Reader({ id }: { id: string }) {
     }
   }
 
+  /* ── AI 伴读 ── */
+  const streamAI = useCallback(
+    async (userContent: string) => {
+      setAiOpen(true);
+      setAiBusy(true);
+      const base = [...aiMsgs, { role: "user" as const, content: userContent }];
+      setAiMsgs([...base, { role: "assistant", content: "…" }]);
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        const resp = await fetch("/api/ai", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token ?? ""}`,
+          },
+          body: JSON.stringify({
+            bookTitle: book?.title,
+            author: book?.author,
+            messages: base,
+          }),
+        });
+        if (!resp.ok || !resp.body) {
+          setAiMsgs([...base, { role: "assistant", content: `出错了（HTTP ${resp.status}），请重试` }]);
+          return;
+        }
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let acc = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          acc += dec.decode(value, { stream: true });
+          setAiMsgs([...base, { role: "assistant", content: acc }]);
+        }
+      } catch {
+        setAiMsgs([...base, { role: "assistant", content: "网络出错，请重试" }]);
+      } finally {
+        setAiBusy(false);
+      }
+    },
+    [aiMsgs, book?.title, book?.author]
+  );
+
+  function quickAsk(kind: "explain" | "translate" | "ask") {
+    const quote = selText;
+    if (!quote) return;
+    setSelText("");
+    if (kind === "ask") {
+      setAiOpen(true);
+      setAiInput(`关于这段：「${quote.slice(0, 120)}${quote.length > 120 ? "…" : ""}」 `);
+      return;
+    }
+    const instruction =
+      kind === "explain"
+        ? "解释这段内容（含必要的背景和它在本书语境中的意思）："
+        : "翻译这段（原文非中文则译成中文；原文是中文则译成英文）：";
+    streamAI(`${instruction}\n\n${quote}`);
+  }
+
+  async function pdfCurrentPageText(): Promise<string> {
+    const doc = pdfDocRef.current;
+    if (!doc) return "";
+    const page = await doc.getPage(pdfPageRef.current);
+    const tc = await page.getTextContent();
+    return tc.items.map((i) => i.str ?? "").join(" ").trim();
+  }
+
+  async function askAboutPdfPage() {
+    const text = await pdfCurrentPageText();
+    if (!text) {
+      streamAI("这一页提取不到文字（可能是扫描版 PDF），请告诉读者这种页面暂时无法讲解。");
+      return;
+    }
+    streamAI(`讲解这一页的内容（P.${pdfPageRef.current}）：\n\n${text.slice(0, 6000)}`);
+  }
+
+  /* ── 朗读（浏览器 speechSynthesis）── */
+  function guessLang(text: string): string {
+    if (book?.language?.trim()) return book.language;
+    if (/[぀-ヿ]/.test(text)) return "ja-JP";
+    if (/[一-鿿]/.test(text)) return "zh-CN";
+    return "en-US";
+  }
+
+  function speakStop() {
+    speakAliveRef.current = false;
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }
+
+  function speakChunks(text: string, onAllDone?: () => void) {
+    const synth = window.speechSynthesis;
+    const lang = guessLang(text);
+    const chunks = text.match(/[^。．.!?！？\n]+[。．.!?！？\n]?/g)?.filter((c) => c.trim()) ?? [];
+    if (!chunks.length) {
+      onAllDone?.();
+      return;
+    }
+    let i = 0;
+    const next = () => {
+      if (!speakAliveRef.current) return;
+      if (i >= chunks.length) {
+        onAllDone?.();
+        return;
+      }
+      const u = new SpeechSynthesisUtterance(chunks[i++]);
+      u.lang = lang;
+      u.onend = next;
+      u.onerror = () => setSpeaking(false);
+      synth.speak(u);
+    };
+    next();
+  }
+
+  async function speakToggle() {
+    if (speaking) {
+      speakStop();
+      return;
+    }
+    speakAliveRef.current = true;
+    setSpeaking(true);
+    if (book?.format === "pdf") {
+      const readPage = async () => {
+        if (!speakAliveRef.current) return;
+        const text = await pdfCurrentPageText();
+        speakChunks(text || "（本页无可朗读文字）", async () => {
+          const doc = pdfDocRef.current;
+          if (speakAliveRef.current && doc && pdfPageRef.current < doc.numPages) {
+            go(1);
+            setTimeout(readPage, 600); // 等页面渲染与进度保存
+          } else {
+            speakStop();
+          }
+        });
+      };
+      readPage();
+    } else {
+      const iframe = document.querySelector("#epub-view iframe") as HTMLIFrameElement | null;
+      const text = iframe?.contentDocument?.body?.innerText ?? "";
+      speakChunks(text || "（本章无可朗读文字）", () => speakStop());
+    }
+  }
+
+  function speakSelection() {
+    if (!selText) return;
+    speakAliveRef.current = true;
+    setSpeaking(true);
+    speakChunks(selText, () => speakStop());
+    setSelText("");
+  }
+
+  /* ── 语音提问（webkitSpeechRecognition，按浏览器支持情况显示）── */
+  type SR = { lang: string; onresult: (e: { results: { 0: { 0: { transcript: string } } } }) => void; onend: () => void; start: () => void };
+  const srCtor = (typeof window !== "undefined"
+    ? (window as unknown as { webkitSpeechRecognition?: new () => SR }).webkitSpeechRecognition
+    : undefined);
+  const [listening, setListening] = useState(false);
+  function startDictation() {
+    if (!srCtor) return;
+    const rec = new srCtor();
+    rec.lang = "zh-CN";
+    rec.onresult = (e) => setAiInput((v) => v + e.results[0][0].transcript);
+    rec.onend = () => setListening(false);
+    setListening(true);
+    rec.start();
+  }
+
+  useEffect(() => {
+    aiMsgsRef.current?.scrollTo({ top: aiMsgsRef.current.scrollHeight });
+  }, [aiMsgs]);
+
   /* 触屏滑动翻页 */
   const touchX = useRef<number | null>(null);
   function onTouchStart(e: React.TouchEvent) {
@@ -321,6 +514,13 @@ export default function Reader({ id }: { id: string }) {
               <button onClick={() => setFont(fontIdx + 1)} aria-label="放大字号">A+</button>
             </>
           )}
+          {book?.format === "pdf" && (
+            <button onClick={askAboutPdfPage} disabled={aiBusy}>问AI·本页</button>
+          )}
+          <button onClick={speakToggle} className={speaking ? "speaking" : ""}>
+            {speaking ? "停" : "朗读"}
+          </button>
+          <button onClick={() => setAiOpen((v) => !v)} aria-expanded={aiOpen}>AI</button>
           <button onClick={toggleSurface}>{surface === "paper" ? "夜" : "纸"}</button>
         </div>
       </div>
@@ -383,6 +583,69 @@ export default function Reader({ id }: { id: string }) {
           </>
         )}
       </div>
+
+      {selText && (
+        <div className="sel-actions" role="toolbar" aria-label="选段操作">
+          <span className="sel-quote">「{selText.slice(0, 40)}{selText.length > 40 ? "…" : ""}」</span>
+          <button onClick={() => quickAsk("explain")}>解释</button>
+          <button onClick={() => quickAsk("translate")}>翻译</button>
+          <button onClick={() => quickAsk("ask")}>问AI</button>
+          <button onClick={speakSelection}>朗读</button>
+          <button onClick={() => setSelText("")} aria-label="关闭">✕</button>
+        </div>
+      )}
+
+      {aiOpen && (
+        <aside className="ai-panel" aria-label="AI 伴读">
+          <div className="ai-head">
+            <span className="mono-label blush">AI COMPANION · 伴读</span>
+            <button onClick={() => setAiOpen(false)} aria-label="收起">✕</button>
+          </div>
+          <div className="ai-msgs" ref={aiMsgsRef}>
+            {aiMsgs.length === 0 && (
+              <div className="ai-hint">
+                {book?.format === "epub"
+                  ? "在正文里选中一段文字，就会弹出「解释 / 翻译 / 问AI」；也可以直接在下面提问。"
+                  : "点顶栏「问AI·本页」讲解当前页，或直接在下面提问。"}
+              </div>
+            )}
+            {aiMsgs.map((m, i) => (
+              <div key={i} className={`ai-msg ${m.role}`}>
+                {m.content}
+              </div>
+            ))}
+          </div>
+          <form
+            className="ai-input"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const q = aiInput.trim();
+              if (!q || aiBusy) return;
+              setAiInput("");
+              streamAI(q);
+            }}
+          >
+            <input
+              value={aiInput}
+              onChange={(e) => setAiInput(e.target.value)}
+              placeholder="问这本书的任何问题…"
+            />
+            {srCtor && (
+              <button
+                type="button"
+                onClick={startDictation}
+                className={listening ? "speaking" : ""}
+                aria-label="语音输入"
+              >
+                {listening ? "听…" : "说"}
+              </button>
+            )}
+            <button type="submit" className="primary" disabled={aiBusy}>
+              {aiBusy ? "…" : "发送"}
+            </button>
+          </form>
+        </aside>
+      )}
 
       <div className="reader-foot">
         <span>{pageInfo}</span>
