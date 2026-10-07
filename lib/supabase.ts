@@ -1,12 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 
-// publishable key = 客户端公开密钥（Supabase 设计上即用于浏览器嵌入），非 secret；
-// env 可覆盖，未设置时用默认值（寄生 learnlog 项目）
-const url =
-  process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() || "https://dhzozfjzhsniyewblwpv.supabase.co";
-const key =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ||
-  "sb_publishable_f_pIVqMK-6ToF3-eYe5n5A_-yb_vpZR";
+// publishable/anon key 是 Supabase 设计用于浏览器嵌入的公开密钥（数据由 RLS 保护），非 secret。
+// 自部署请在 .env.local / Vercel 环境变量里填自己的 Supabase 项目。
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+
+if (!url || !key) {
+  throw new Error(
+    "缺少 NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY，请参考 README 配置环境变量"
+  );
+}
 
 export const supabase = createClient(url, key);
 
@@ -21,6 +24,7 @@ export type Book = {
   language: string | null;
   status: "want" | "reading" | "done";
   percent: number;
+  total_seconds: number;
   position: string | null;
   file_size: number | null;
   added_at: string;

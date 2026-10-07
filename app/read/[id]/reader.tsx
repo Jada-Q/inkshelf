@@ -7,6 +7,8 @@ import { supabase, type Book } from "@/lib/supabase";
 
 const BUCKET = "inkshelf-books";
 const FONT_STEPS = [90, 100, 115, 130, 150];
+const IDLE_MS = 180_000; // 无翻页/滚动超 3 分钟 → 停表（挂机不计）
+const SPLIT_MS = 300_000; // 超 5 分钟静默 → 断为新一场阅读
 
 type EpubContents = { window: Window };
 type EpubRendition = {
@@ -81,6 +83,15 @@ export default function Reader({ id }: { id: string }) {
   const pdfPageRef = useRef(1);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /* ── M1: 读书计时（会话表=真值，books.total_seconds=快速缓存）──
+     诚实规则：切后台不计 / 超 IDLE_MS 无动作停表 / 超 SPLIT_MS 断为新一场 */
+  const uidRef = useRef<string | null>(null);
+  const lastActRef = useRef(0);
+  const sitSecRef = useRef(0); // 本场累计秒
+  const sitIdRef = useRef<string | null>(null);
+  const flushBaseRef = useRef(0); // 上次落库时的秒数
+  const [liveSecs, setLiveSecs] = useState(0);
+
   /* debounced progress save */
   const saveProgress = useCallback(
     (position: string, pct: number) => {
@@ -107,6 +118,8 @@ export default function Reader({ id }: { id: string }) {
         router.replace("/login");
         return;
       }
+      uidRef.current = sess.session.user.id;
+      lastActRef.current = Date.now();
       const { data, error } = await supabase.from("inkshelf_books").select("*").eq("id", id).single();
       if (error || !data) {
         setErr("找不到这本书");
@@ -267,6 +280,7 @@ export default function Reader({ id }: { id: string }) {
 
   const go = useCallback(
     (dir: 1 | -1) => {
+      lastActRef.current = Date.now();
       if (book?.format === "epub") {
         if (dir === 1) renditionRef.current?.next();
         else renditionRef.current?.prev();
@@ -282,7 +296,43 @@ export default function Reader({ id }: { id: string }) {
     [book?.format]
   );
 
+  /* 落库一次：session 行 + 原子累加 total_seconds */
+  const flushClock = useCallback(async () => {
+    const uid = uidRef.current;
+    if (!uid) return;
+    const secs = sitSecRef.current;
+    const delta = secs - flushBaseRef.current;
+    if (delta <= 0) return;
+    const nowIso = new Date().toISOString();
+    try {
+      if (!sitIdRef.current) {
+        const sid = crypto.randomUUID();
+        const started = new Date(Date.now() - secs * 1000).toISOString();
+        const { error } = await supabase.from("inkshelf_sessions").insert({
+          id: sid,
+          owner: uid,
+          book_id: id,
+          started_at: started,
+          ended_at: nowIso,
+          seconds: secs,
+        });
+        if (error) return;
+        sitIdRef.current = sid;
+      } else {
+        await supabase
+          .from("inkshelf_sessions")
+          .update({ seconds: secs, ended_at: nowIso, updated_at: nowIso })
+          .eq("id", sitIdRef.current);
+      }
+      await supabase.rpc("inkshelf_add_reading_time", { p_book: id, p_seconds: delta });
+      flushBaseRef.current = secs;
+    } catch {
+      /* 下个 flush 周期重试 */
+    }
+  }, [id]);
+
   function jumpTo(target: string) {
+    lastActRef.current = Date.now();
     setTocOpen(false);
     if (book?.format === "epub") {
       renditionRef.current?.display(target);
@@ -474,6 +524,7 @@ export default function Reader({ id }: { id: string }) {
   /* 触屏滑动翻页 */
   const touchX = useRef<number | null>(null);
   function onTouchStart(e: React.TouchEvent) {
+    lastActRef.current = Date.now();
     touchX.current = e.touches[0].clientX;
   }
   function onTouchEnd(e: React.TouchEvent) {
@@ -491,6 +542,43 @@ export default function Reader({ id }: { id: string }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [go]);
+
+  /* 读书计时主循环：每秒判定是否在真实阅读，每 20 秒落库 */
+  useEffect(() => {
+    let tick = 0;
+    const iv = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      const idle = Date.now() - lastActRef.current;
+      if (idle > IDLE_MS) {
+        if (sitIdRef.current && idle > SPLIT_MS) {
+          // 久未动作：结清本场，下次动作开新一场
+          flushClock().then(() => {
+            sitSecRef.current = 0;
+            sitIdRef.current = null;
+            flushBaseRef.current = 0;
+            setLiveSecs(0);
+          });
+        }
+        return;
+      }
+      sitSecRef.current += 1;
+      setLiveSecs(sitSecRef.current);
+      tick += 1;
+      if (tick % 20 === 0) flushClock();
+    }, 1000);
+    const onVis = () => {
+      if (document.hidden) flushClock();
+    };
+    const onHide = () => flushClock();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", onHide);
+      flushClock();
+    };
+  }, [flushClock]);
 
   function setFont(idx: number) {
     const i = Math.min(Math.max(idx, 0), FONT_STEPS.length - 1);
@@ -539,7 +627,7 @@ export default function Reader({ id }: { id: string }) {
         ) : null}
         {book?.format === "epub" && <div id="epub-view" ref={epubViewRef} />}
         {book?.format === "pdf" && (
-          <div className="pdf-scroll">
+          <div className="pdf-scroll" onScroll={() => { lastActRef.current = Date.now(); }}>
             <canvas ref={pdfCanvasRef} />
           </div>
         )}
@@ -656,6 +744,12 @@ export default function Reader({ id }: { id: string }) {
       <div className="reader-foot">
         <span>{pageInfo}</span>
         <span>
+          {liveSecs > 0 && (
+            <>
+              本次 {liveSecs < 60 ? `${liveSecs} 秒` : `${Math.floor(liveSecs / 60)} 分`}
+              {" · "}
+            </>
+          )}
           <span className="pct">{Math.round(percent * 100)}%</span>
           {" · "}
           {saved ? "已同步" : "保存中…"}

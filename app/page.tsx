@@ -227,7 +227,7 @@ export default function ShelfPage() {
         </div>
         <button className="side-item on">书架</button>
         <button className="side-item dim" title="M1 再来">笔记本 · 待建</button>
-        <button className="side-item dim" title="M1 再来">阅读统计 · 待建</button>
+        <Link href="/stats" className="side-item">阅读统计</Link>
         <div className="side-foot">
           <label className="side-item" style={{ cursor: "pointer" }}>
             ＋ 导入书

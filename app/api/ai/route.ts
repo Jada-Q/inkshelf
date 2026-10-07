@@ -2,8 +2,8 @@ import { streamText, gateway } from "ai";
 
 export const maxDuration = 60;
 
-const SUPABASE_URL = "https://dhzozfjzhsniyewblwpv.supabase.co";
-const SUPABASE_KEY = "sb_publishable_f_pIVqMK-6ToF3-eYe5n5A_-yb_vpZR";
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 // Vercel AI Gateway slug（点号版本）；可用 env 覆盖。部署后用 GET /api/ai 实查可用清单后锁定。
 const MODEL = process.env.INKSHELF_AI_MODEL?.trim() || "anthropic/claude-opus-5";
