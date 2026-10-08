@@ -197,7 +197,6 @@ export function LocaleProvider({ children }: { children: React.ReactNode }) {
     }
     const nav = navigator.language.slice(0, 2).toLowerCase();
     const match = (LOCALES.find((l) => l.code === nav)?.code) as Locale | undefined;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (match) setLoc(match);
   }, []);
 

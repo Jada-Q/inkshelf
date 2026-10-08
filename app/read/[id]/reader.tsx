@@ -104,7 +104,6 @@ export default function Reader({ id }: { id: string }) {
   const sitSecRef = useRef(0); // 本场累计秒
   const sitIdRef = useRef<string | null>(null);
   const flushBaseRef = useRef(0); // 上次落库时的秒数
-  const [liveSecs, setLiveSecs] = useState(0);
 
   /* debounced progress save */
   const saveProgress = useCallback(
@@ -177,12 +176,13 @@ export default function Reader({ id }: { id: string }) {
         allowScriptedContent: false,
       });
       renditionRef.current = rendition;
-      // 移动端：压掉 iOS 长按的原生 Copy/查询菜单，但保留选字 → 让我们的浮条接管
-      const selCss = {
-        "-webkit-touch-callout": "none",
-        "-webkit-user-select": "text",
-        "user-select": "text",
-      };
+      // 触屏设备：禁用原生选区（iOS 的文字编辑菜单无法用 CSS 关掉）→ 改用「点词选取」
+      const isTouch =
+        typeof window !== "undefined" &&
+        ((window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || "ontouchstart" in window);
+      const selCss: Record<string, string> = isTouch
+        ? { "-webkit-user-select": "none", "user-select": "none", "-webkit-touch-callout": "none" }
+        : { "-webkit-user-select": "text", "user-select": "text" };
       rendition.themes.register("paper", {
         body: { background: "#ffffff", color: "#37352f", "line-height": "1.85", ...selCss },
       });
@@ -198,22 +198,15 @@ export default function Reader({ id }: { id: string }) {
       setSurface(storedSurf);
       setFontIdx(storedFont);
 
-      // 跨浏览器选区捕获（Safari/移动端更可靠）：在每个正文文档挂 mouseup/touchend
-      const captureSelection = (contents: EpubContents) => {
-        const sel = contents.window.getSelection();
-        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-        const text = sel.toString().trim();
-        if (!text) return;
-        const range = sel.getRangeAt(0);
+      // 浮条定位 + 填充选区信息
+      const presentSelection = (range: Range, contents: EpubContents, text: string) => {
         let cfi = "";
         try { cfi = contents.cfiFromRange(range); } catch {}
-        // 把工具条定位到选中文字旁（浮条，不再丢到屏幕底部）
         try {
           const ir = epubViewRef.current?.querySelector("iframe")?.getBoundingClientRect();
           const rr = range.getBoundingClientRect();
           if (ir) {
             const vw = window.innerWidth;
-            // 窄屏：水平居中（只跟踪垂直，贴着选中行）；宽屏：跟随选区 x，留足半宽防溢出
             const half = Math.min(180, vw * 0.45);
             const x = vw <= 560 ? vw / 2 : Math.max(half, Math.min(vw - half, ir.left + rr.left + rr.width / 2));
             let y = ir.top + rr.bottom + 10;
@@ -228,30 +221,91 @@ export default function Reader({ id }: { id: string }) {
         setSelText(text);
         selCfiRef.current = cfi;
         try {
-          const ctx = (sel.anchorNode?.parentElement?.textContent ?? "").trim();
+          const el = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : (range.startContainer as Element);
+          const ctx = (el?.textContent ?? "").trim();
           selCtxRef.current = ctx.length > 240 ? ctx.slice(0, 240) : ctx;
         } catch {
           selCtxRef.current = "";
         }
       };
+
+      // 桌面：拖选 → 浮条
+      const captureSelection = (contents: EpubContents) => {
+        const sel = contents.window.getSelection();
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+        const text = sel.toString().trim();
+        if (!text) return;
+        presentSelection(sel.getRangeAt(0), contents, text);
+      };
+
+      // 触屏：点一个词 → 选取并弹浮条（绕开 iOS 原生选区菜单）
+      type CaretDoc = Document & {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+      };
+      const pickWordAt = (contents: EpubContents, x: number, y: number) => {
+        const doc = contents.document as CaretDoc;
+        let base: Range | null = null;
+        if (doc.caretRangeFromPoint) base = doc.caretRangeFromPoint(x, y);
+        else if (doc.caretPositionFromPoint) {
+          const pos = doc.caretPositionFromPoint(x, y);
+          if (pos) { base = doc.createRange(); base.setStart(pos.offsetNode, pos.offset); base.collapse(true); }
+        }
+        if (!base) return;
+        const node = base.startContainer;
+        if (node.nodeType !== 3 || !node.textContent) return;
+        const tt = node.textContent;
+        const isW = (c: string) => !!c && !/\s/.test(c);
+        let s = base.startOffset, e = base.startOffset;
+        while (s > 0 && isW(tt[s - 1])) s--;
+        while (e < tt.length && isW(tt[e])) e++;
+        if (e <= s) return;
+        const wr = doc.createRange();
+        wr.setStart(node, s); wr.setEnd(node, e);
+        const word = tt.slice(s, e).trim();
+        if (!word) return;
+        presentSelection(wr, contents, word);
+      };
+
       rendition.hooks.content.register((contents: EpubContents) => {
         const doc = contents.document;
-        const h = () => captureSelection(contents);
-        doc.addEventListener("mouseup", h);
-        doc.addEventListener("touchend", h);
-        // 双击选词 → 直接弹浮条（选词最省力）
-        doc.addEventListener("dblclick", () => setTimeout(h, 0));
-        // 任何方式选中都能唤出（去抖）
-        let st: ReturnType<typeof setTimeout>;
-        doc.addEventListener("selectionchange", () => {
-          clearTimeout(st);
-          st = setTimeout(h, 350);
-        });
-        // 屏蔽浏览器原生选区菜单，只用我们自己的
-        doc.addEventListener("contextmenu", (e: Event) => e.preventDefault());
+        doc.addEventListener("contextmenu", (ev: Event) => ev.preventDefault());
+        if (isTouch) {
+          // 触屏：滑动翻页 or 点词选取（二选一，按位移区分）
+          let sx = 0, sy = 0, stime = 0;
+          doc.addEventListener(
+            "touchstart",
+            (ev: Event) => {
+              const te = ev as TouchEvent;
+              sx = te.touches[0].clientX; sy = te.touches[0].clientY; stime = Date.now();
+            },
+            { passive: true }
+          );
+          doc.addEventListener(
+            "touchend",
+            (ev: Event) => {
+              const te = ev as TouchEvent;
+              const t2 = te.changedTouches[0];
+              const dx = t2.clientX - sx, dy = t2.clientY - sy;
+              if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
+                lastActRef.current = Date.now();
+                if (dx < 0) renditionRef.current?.next();
+                else renditionRef.current?.prev();
+              } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && Date.now() - stime < 500) {
+                pickWordAt(contents, t2.clientX, t2.clientY);
+              }
+            },
+            { passive: true }
+          );
+        } else {
+          const h = () => captureSelection(contents);
+          doc.addEventListener("mouseup", h);
+          doc.addEventListener("dblclick", () => setTimeout(h, 0));
+          let st: ReturnType<typeof setTimeout>;
+          doc.addEventListener("selectionchange", () => { clearTimeout(st); st = setTimeout(h, 350); });
+        }
       });
-      // 保留 epub 原生 selected 作为兜底
-      rendition.on("selected", (_cfi: string, contents: EpubContents) => captureSelection(contents));
+      rendition.on("selected", (_cfi: string, contents: EpubContents) => { if (!isTouch) captureSelection(contents); });
 
       rendition.on("relocated", (loc: EpubLocation) => {
         const cfi = loc.start.cfi;
@@ -260,7 +314,7 @@ export default function Reader({ id }: { id: string }) {
           pct = epubBookRef.current.locations.percentageFromCfi(cfi);
         }
         if (pct > 0) setPercent(pct);
-        setPageInfo(cfi.slice(0, 28) + "…");
+        setPageInfo("");
         saveProgress(cfi, pct > 0 ? pct : 0);
       });
 
@@ -745,13 +799,11 @@ export default function Reader({ id }: { id: string }) {
             sitSecRef.current = 0;
             sitIdRef.current = null;
             flushBaseRef.current = 0;
-            setLiveSecs(0);
           });
         }
         return;
       }
       sitSecRef.current += 1;
-      setLiveSecs(sitSecRef.current);
       tick += 1;
       if (tick % 20 === 0) flushClock();
     }, 1000);
@@ -945,12 +997,6 @@ export default function Reader({ id }: { id: string }) {
       <div className="reader-foot">
         <span>{pageInfo}</span>
         <span>
-          {liveSecs > 0 && (
-            <>
-              {t("this_time")} {liveSecs < 60 ? `${liveSecs} ${t("sec")}` : `${Math.floor(liveSecs / 60)} ${t("min")}`}
-              {" · "}
-            </>
-          )}
           <span className="pct">{Math.round(percent * 100)}%</span>
           {" · "}
           {saved ? t("synced") : t("saving")}
