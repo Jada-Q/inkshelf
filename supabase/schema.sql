@@ -64,3 +64,27 @@ create policy "inkshelf storage update" on storage.objects
   for update using (bucket_id = 'inkshelf-books' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "inkshelf storage delete" on storage.objects
   for delete using (bucket_id = 'inkshelf-books' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ── 划线/笔记 ──
+create table if not exists public.inkshelf_highlights (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  book_id uuid not null references public.inkshelf_books(id) on delete cascade,
+  cfi text, page integer, quote text not null, color text not null default 'yellow', note text,
+  created_at timestamptz not null default now()
+);
+alter table public.inkshelf_highlights enable row level security;
+create policy "inkshelf_highlights owner all" on public.inkshelf_highlights for all using (auth.uid() = owner) with check (auth.uid() = owner);
+create index if not exists inkshelf_highlights_owner_book on public.inkshelf_highlights (owner, book_id, created_at);
+
+-- ── 生词库 ──
+create table if not exists public.inkshelf_vocab (
+  id uuid primary key default gen_random_uuid(),
+  owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
+  book_id uuid references public.inkshelf_books(id) on delete set null,
+  term text not null, translation text, context text,
+  created_at timestamptz not null default now()
+);
+alter table public.inkshelf_vocab enable row level security;
+create policy "inkshelf_vocab owner all" on public.inkshelf_vocab for all using (auth.uid() = owner) with check (auth.uid() = owner);
+create index if not exists inkshelf_vocab_owner on public.inkshelf_vocab (owner, created_at desc);
