@@ -11,7 +11,7 @@ const FONT_STEPS = [90, 100, 115, 130, 150];
 const IDLE_MS = 180_000; // 无翻页/滚动超 3 分钟 → 停表（挂机不计）
 const SPLIT_MS = 300_000; // 超 5 分钟静默 → 断为新一场阅读
 
-type EpubContents = { window: Window };
+type EpubContents = { window: Window; document: Document; cfiFromRange: (r: Range) => string };
 type EpubRendition = {
   display: (target?: string) => Promise<void>;
   prev: () => void;
@@ -19,6 +19,7 @@ type EpubRendition = {
   on(event: "relocated", cb: (loc: EpubLocation) => void): void;
   on(event: "selected", cb: (cfiRange: string, contents: EpubContents) => void): void;
   resize: (width?: number, height?: number) => void;
+  hooks: { content: { register: (fn: (contents: EpubContents) => void) => void } };
   annotations: {
     add: (type: string, cfiRange: string, data?: object, cb?: () => void, className?: string, styles?: object) => void;
     remove: (cfiRange: string, type: string) => void;
@@ -190,19 +191,30 @@ export default function Reader({ id }: { id: string }) {
       setSurface(storedSurf);
       setFontIdx(storedFont);
 
-      rendition.on("selected", (cfiRange: string, contents: EpubContents) => {
+      // 跨浏览器选区捕获（Safari/移动端更可靠）：在每个正文文档挂 mouseup/touchend
+      const captureSelection = (contents: EpubContents) => {
         const sel = contents.window.getSelection();
-        const text = sel?.toString().trim() ?? "";
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+        const text = sel.toString().trim();
         if (!text) return;
+        let cfi = "";
+        try { cfi = contents.cfiFromRange(sel.getRangeAt(0)); } catch {}
         setSelText(text);
-        selCfiRef.current = cfiRange;
+        selCfiRef.current = cfi;
         try {
-          const ctx = (sel?.anchorNode?.parentElement?.textContent ?? "").trim();
+          const ctx = (sel.anchorNode?.parentElement?.textContent ?? "").trim();
           selCtxRef.current = ctx.length > 240 ? ctx.slice(0, 240) : ctx;
         } catch {
           selCtxRef.current = "";
         }
+      };
+      rendition.hooks.content.register((contents: EpubContents) => {
+        const h = () => captureSelection(contents);
+        contents.document.addEventListener("mouseup", h);
+        contents.document.addEventListener("touchend", h);
       });
+      // 保留 epub 原生 selected 作为兜底
+      rendition.on("selected", (_cfi: string, contents: EpubContents) => captureSelection(contents));
 
       rendition.on("relocated", (loc: EpubLocation) => {
         const cfi = loc.start.cfi;
