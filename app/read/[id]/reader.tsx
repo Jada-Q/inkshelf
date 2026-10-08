@@ -212,9 +212,12 @@ export default function Reader({ id }: { id: string }) {
           const ir = epubViewRef.current?.querySelector("iframe")?.getBoundingClientRect();
           const rr = range.getBoundingClientRect();
           if (ir) {
-            const x = Math.max(100, Math.min(window.innerWidth - 100, ir.left + rr.left + rr.width / 2));
+            const vw = window.innerWidth;
+            // 窄屏：水平居中（只跟踪垂直，贴着选中行）；宽屏：跟随选区 x，留足半宽防溢出
+            const half = Math.min(180, vw * 0.45);
+            const x = vw <= 560 ? vw / 2 : Math.max(half, Math.min(vw - half, ir.left + rr.left + rr.width / 2));
             let y = ir.top + rr.bottom + 10;
-            if (y > window.innerHeight - 60) y = ir.top + rr.top - 46;
+            if (y > window.innerHeight - 70) y = Math.max(8, ir.top + rr.top - 46);
             setSelPos({ x, y });
           } else {
             setSelPos(null);
