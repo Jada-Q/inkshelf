@@ -18,6 +18,7 @@ type EpubRendition = {
   next: () => void;
   on(event: "relocated", cb: (loc: EpubLocation) => void): void;
   on(event: "selected", cb: (cfiRange: string, contents: EpubContents) => void): void;
+  resize: (width?: number, height?: number) => void;
   themes: {
     register: (name: string, rules: Record<string, Record<string, string>>) => void;
     select: (name: string) => void;
@@ -524,6 +525,22 @@ export default function Reader({ id }: { id: string }) {
     aiMsgsRef.current?.scrollTo({ top: aiMsgsRef.current.scrollHeight });
   }, [aiMsgs]);
 
+  /* AI 面板开合会改变正文宽度 → 让 epub/pdf 重排，避免被遮挡 */
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (book?.format === "epub") {
+        const el = epubViewRef.current;
+        if (el && renditionRef.current?.resize) {
+          renditionRef.current.resize(el.clientWidth, el.clientHeight);
+        }
+      } else if (pdfDocRef.current) {
+        renderPdfPage(pdfPageRef.current);
+      }
+    }, 80);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiOpen]);
+
   /* 触屏滑动翻页 */
   const touchX = useRef<number | null>(null);
   function onTouchStart(e: React.TouchEvent) {
@@ -623,6 +640,7 @@ export default function Reader({ id }: { id: string }) {
         </div>
       </div>
 
+      <div className="reader-body">
       <div className={`reader-stage ${surface}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         {err ? (
           <div className="center-msg">{err}</div>
@@ -680,9 +698,8 @@ export default function Reader({ id }: { id: string }) {
             </aside>
           </>
         )}
-      </div>
 
-      {selText && (
+        {selText && (
         <div className="sel-actions" role="toolbar" aria-label="选段操作">
           <span className="sel-quote">「{selText.slice(0, 40)}{selText.length > 40 ? "…" : ""}」</span>
           <button onClick={() => quickAsk("explain")}>{t("explain")}</button>
@@ -692,6 +709,7 @@ export default function Reader({ id }: { id: string }) {
           <button onClick={() => setSelText("")} aria-label="关闭">✕</button>
         </div>
       )}
+      </div>
 
       {aiOpen && (
         <aside className="ai-panel" aria-label="AI 伴读">
@@ -742,6 +760,7 @@ export default function Reader({ id }: { id: string }) {
           </form>
         </aside>
       )}
+      </div>
 
       <div className="reader-foot">
         <span>{pageInfo}</span>
