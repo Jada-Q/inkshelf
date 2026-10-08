@@ -75,6 +75,7 @@ export default function Reader({ id }: { id: string }) {
   /* ── M1: 划线 / 笔记 / 生词 ── */
   const selCfiRef = useRef<string>("");
   const selCtxRef = useRef<string>("");
+  const [selPos, setSelPos] = useState<{ x: number; y: number } | null>(null);
   const [rToast, setRToast] = useState<string | null>(null);
 
   /* ── M2: AI 伴读 + 朗读 ── */
@@ -197,8 +198,24 @@ export default function Reader({ id }: { id: string }) {
         if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
         const text = sel.toString().trim();
         if (!text) return;
+        const range = sel.getRangeAt(0);
         let cfi = "";
-        try { cfi = contents.cfiFromRange(sel.getRangeAt(0)); } catch {}
+        try { cfi = contents.cfiFromRange(range); } catch {}
+        // 把工具条定位到选中文字旁（浮条，不再丢到屏幕底部）
+        try {
+          const ir = epubViewRef.current?.querySelector("iframe")?.getBoundingClientRect();
+          const rr = range.getBoundingClientRect();
+          if (ir) {
+            const x = Math.max(100, Math.min(window.innerWidth - 100, ir.left + rr.left + rr.width / 2));
+            let y = ir.top + rr.bottom + 10;
+            if (y > window.innerHeight - 60) y = ir.top + rr.top - 46;
+            setSelPos({ x, y });
+          } else {
+            setSelPos(null);
+          }
+        } catch {
+          setSelPos(null);
+        }
         setSelText(text);
         selCfiRef.current = cfi;
         try {
@@ -833,7 +850,12 @@ export default function Reader({ id }: { id: string }) {
         )}
 
         {selText && (
-        <div className="sel-actions" role="toolbar" aria-label="选段操作">
+        <div
+          className="sel-actions"
+          role="toolbar"
+          aria-label="选段操作"
+          style={selPos ? { left: selPos.x, top: selPos.y, bottom: "auto", transform: "translateX(-50%)" } : undefined}
+        >
           <span className="sel-quote">「{selText.slice(0, 32)}{selText.length > 32 ? "…" : ""}」</span>
           <button onClick={() => saveHighlight(false)}>{t("hl")}</button>
           <button onClick={() => saveHighlight(true)}>{t("note")}</button>

@@ -264,8 +264,9 @@ input:focus { border-color: var(--blue); }
 
 /* ── selection actions ── */
 .sel-actions {
-  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
-  z-index: 15; display: flex; align-items: center; gap: 4px;
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 45; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  justify-content: center;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
   padding: 6px 8px; box-shadow: 0 8px 28px rgba(15,15,15,.14); max-width: min(92vw, 560px);
 }
