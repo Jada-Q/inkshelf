@@ -270,6 +270,11 @@ input:focus { border-color: var(--blue); }
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
   padding: 6px 8px; box-shadow: 0 8px 28px rgba(15,15,15,.14); max-width: min(92vw, 560px);
 }
+@media (max-width: 560px) {
+  .sel-actions { max-width: 94vw; gap: 2px; padding: 6px; }
+  .sel-actions .sel-quote { display: none; } /* 窄屏省空间：不显示选段预览 */
+  .sel-actions button { padding: 6px 10px; font-size: 13px; }
+}
 .sel-quote {
   font-size: 12px; color: var(--ink-3); font-family: var(--serif);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px;

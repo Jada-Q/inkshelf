@@ -177,11 +177,17 @@ export default function Reader({ id }: { id: string }) {
         allowScriptedContent: false,
       });
       renditionRef.current = rendition;
+      // 移动端：压掉 iOS 长按的原生 Copy/查询菜单，但保留选字 → 让我们的浮条接管
+      const selCss = {
+        "-webkit-touch-callout": "none",
+        "-webkit-user-select": "text",
+        "user-select": "text",
+      };
       rendition.themes.register("paper", {
-        body: { background: "#ffffff", color: "#37352f", "line-height": "1.85" },
+        body: { background: "#ffffff", color: "#37352f", "line-height": "1.85", ...selCss },
       });
       rendition.themes.register("night", {
-        body: { background: "#191919", color: "#d3d1cb", "line-height": "1.85" },
+        body: { background: "#191919", color: "#d3d1cb", "line-height": "1.85", ...selCss },
       });
       // 应用持久化的阅读偏好（字号 / 夜间）
       const storedSurf = localStorage.getItem("inkshelf-surface") === "night" ? "night" : "paper";
