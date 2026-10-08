@@ -226,9 +226,20 @@ export default function Reader({ id }: { id: string }) {
         }
       };
       rendition.hooks.content.register((contents: EpubContents) => {
+        const doc = contents.document;
         const h = () => captureSelection(contents);
-        contents.document.addEventListener("mouseup", h);
-        contents.document.addEventListener("touchend", h);
+        doc.addEventListener("mouseup", h);
+        doc.addEventListener("touchend", h);
+        // 双击选词 → 直接弹浮条（选词最省力）
+        doc.addEventListener("dblclick", () => setTimeout(h, 0));
+        // 任何方式选中都能唤出（去抖）
+        let st: ReturnType<typeof setTimeout>;
+        doc.addEventListener("selectionchange", () => {
+          clearTimeout(st);
+          st = setTimeout(h, 350);
+        });
+        // 屏蔽浏览器原生选区菜单，只用我们自己的
+        doc.addEventListener("contextmenu", (e: Event) => e.preventDefault());
       });
       // 保留 epub 原生 selected 作为兜底
       rendition.on("selected", (_cfi: string, contents: EpubContents) => captureSelection(contents));
