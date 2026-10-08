@@ -77,7 +77,8 @@ export default function StatsPage() {
           <span className="name">{t("brand")}</span>
         </div>
         <Link href="/" className="side-item">{t("nav_shelf")}</Link>
-        <button className="side-item dim">{t("nav_notes")}</button>
+        <Link href="/notes" className="side-item">{t("nav_notes")}</Link>
+        <Link href="/vocab" className="side-item">{t("nav_vocab")}</Link>
         <button className="side-item on">{t("nav_stats")}</button>
         <div className="side-foot">
           <LangSwitch />

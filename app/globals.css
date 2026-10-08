@@ -312,6 +312,24 @@ input:focus { border-color: var(--blue); }
 .ai-input button { flex-shrink: 0; }
 button.speaking { color: var(--ai); background: var(--ai-soft); }
 
+/* ── notes / vocab ── */
+.note-list { display: flex; flex-direction: column; gap: 10px; }
+.note-card { position: relative; border: 1px solid var(--line); border-radius: 6px; padding: 12px 42px 12px 14px; background: var(--bg); }
+.note-quote { display: block; font-family: var(--serif); font-size: 14.5px; line-height: 1.7; color: var(--ink); text-decoration: none; border-left: 3px solid #ffe58a; padding-left: 10px; }
+.note-quote:hover { color: var(--blue); }
+.note-body { margin-top: 8px; font-size: 13.5px; color: var(--ink-2); line-height: 1.7; padding-left: 13px; }
+.note-del, .note-card .note-del { position: absolute; top: 10px; right: 10px; border: none; font-size: 11px; color: var(--ink-3); padding: 2px 6px; }
+.note-del:hover { color: #c03d2e; background: transparent; }
+
+.vocab-list { display: flex; flex-direction: column; gap: 2px; }
+.vocab-card { position: relative; border-bottom: 1px solid var(--line); padding: 12px 42px 12px 6px; }
+.vocab-head { display: flex; align-items: baseline; gap: 12px; }
+.vocab-term { font-family: var(--brush); font-weight: 700; font-size: 17px; color: var(--ink); }
+.vocab-tr { font-size: 14px; color: var(--ink-2); }
+.vocab-ctx { margin-top: 5px; font-size: 12.5px; color: var(--ink-3); font-family: var(--serif); line-height: 1.6; }
+.vocab-src { display: inline-block; margin-top: 5px; font-size: 11.5px; color: var(--ink-3); text-decoration: none; }
+.vocab-src:hover { color: var(--blue); }
+
 /* ── language switcher ── */
 .lang-switch {
   font-family: var(--sans); font-size: 13px; color: var(--ink-2);

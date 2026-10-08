@@ -29,7 +29,6 @@ export default function ShelfPage() {
   const [books, setBooks] = useState<Book[]>([]);
   const [covers, setCovers] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<"all" | Book["status"]>("all");
-  const [view, setView] = useState<"gallery" | "table">("gallery");
   const [toast, setToast] = useState<{ text: string; err?: boolean } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -223,7 +222,8 @@ export default function ShelfPage() {
           <span className="name">{t("brand")}</span>
         </div>
         <button className="side-item on">{t("nav_shelf")}</button>
-        <button className="side-item dim">{t("nav_notes")}</button>
+        <Link href="/notes" className="side-item">{t("nav_notes")}</Link>
+        <Link href="/vocab" className="side-item">{t("nav_vocab")}</Link>
         <Link href="/stats" className="side-item">{t("nav_stats")}</Link>
         <div className="side-foot">
           <LangSwitch />
@@ -257,13 +257,6 @@ export default function ShelfPage() {
         <h1 className="page-title">{t("nav_shelf")}</h1>
 
         <div className="view-row">
-          <button className={`tab ${view === "gallery" ? "on" : ""}`} onClick={() => setView("gallery")}>
-            {t("view_gallery")}
-          </button>
-          <button className={`tab ${view === "table" ? "on" : ""}`} onClick={() => setView("table")}>
-            {t("view_table")}
-          </button>
-          <span className="spacer" />
           <div className="filters">
             {(["all", "reading", "want", "done"] as const).map((f) => (
               <button key={f} className={filter === f ? "on" : ""} onClick={() => setFilter(f)}>
@@ -278,7 +271,7 @@ export default function ShelfPage() {
             <div className="big">{t("drop_big")}</div>
             <div>{t("drop_sub")}</div>
           </div>
-        ) : view === "gallery" ? (
+        ) : (
           <div className="grid">
             {shown.map((b) => (
               <div key={b.id} className="book-card">
@@ -328,41 +321,6 @@ export default function ShelfPage() {
               </div>
             ))}
           </div>
-        ) : (
-          <table className="db-table">
-            <thead>
-              <tr>
-                <th>{t("c_title")}</th>
-                <th>{t("c_author")}</th>
-                <th>{t("c_status")}</th>
-                <th>{t("c_progress")}</th>
-                <th>{t("c_format")}</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((b) => (
-                <tr key={b.id}>
-                  <td className="t-title">
-                    <Link href={`/read/${b.id}`}>{b.title}</Link>
-                  </td>
-                  <td style={{ color: "var(--ink-2)" }}>{b.author ?? "—"}</td>
-                  <td>
-                    <button className={`tag ${b.status}`} onClick={() => cycleStatus(b)}>
-                      {t(b.status)}
-                    </button>
-                  </td>
-                  <td className="num">{Math.round(b.percent * 100)}%</td>
-                  <td className="num">{b.format.toUpperCase()}</td>
-                  <td>
-                    <button className="rm" style={{ fontSize: 12 }} onClick={() => removeBook(b)}>
-                      {t("remove")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         )}
       </main>
 

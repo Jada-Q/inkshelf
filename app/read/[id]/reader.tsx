@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
-import { useI18n, LangSwitch } from "@/lib/i18n";
+import { useI18n } from "@/lib/i18n";
 
 const BUCKET = "inkshelf-books";
 const FONT_STEPS = [90, 100, 115, 130, 150];
@@ -19,6 +19,10 @@ type EpubRendition = {
   on(event: "relocated", cb: (loc: EpubLocation) => void): void;
   on(event: "selected", cb: (cfiRange: string, contents: EpubContents) => void): void;
   resize: (width?: number, height?: number) => void;
+  annotations: {
+    add: (type: string, cfiRange: string, data?: object, cb?: () => void, className?: string, styles?: object) => void;
+    remove: (cfiRange: string, type: string) => void;
+  };
   themes: {
     register: (name: string, rules: Record<string, Record<string, string>>) => void;
     select: (name: string) => void;
@@ -66,6 +70,11 @@ export default function Reader({ id }: { id: string }) {
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [tocOpen, setTocOpen] = useState(false);
   const [jumpPage, setJumpPage] = useState("");
+
+  /* ── M1: 划线 / 笔记 / 生词 ── */
+  const selCfiRef = useRef<string>("");
+  const selCtxRef = useRef<string>("");
+  const [rToast, setRToast] = useState<string | null>(null);
 
   /* ── M2: AI 伴读 + 朗读 ── */
   const [selText, setSelText] = useState("");
@@ -172,12 +181,27 @@ export default function Reader({ id }: { id: string }) {
       rendition.themes.register("night", {
         body: { background: "#191919", color: "#d3d1cb", "line-height": "1.85" },
       });
-      rendition.themes.select("paper");
-      rendition.themes.fontSize(`${FONT_STEPS[1]}%`);
+      // 应用持久化的阅读偏好（字号 / 夜间）
+      const storedSurf = localStorage.getItem("inkshelf-surface") === "night" ? "night" : "paper";
+      const storedFontRaw = Number(localStorage.getItem("inkshelf-font"));
+      const storedFont = storedFontRaw >= 0 && storedFontRaw < FONT_STEPS.length ? storedFontRaw : 1;
+      rendition.themes.select(storedSurf);
+      rendition.themes.fontSize(`${FONT_STEPS[storedFont]}%`);
+      setSurface(storedSurf);
+      setFontIdx(storedFont);
 
-      rendition.on("selected", (_cfiRange: string, contents: EpubContents) => {
-        const t = contents.window.getSelection()?.toString().trim() ?? "";
-        if (t) setSelText(t);
+      rendition.on("selected", (cfiRange: string, contents: EpubContents) => {
+        const sel = contents.window.getSelection();
+        const text = sel?.toString().trim() ?? "";
+        if (!text) return;
+        setSelText(text);
+        selCfiRef.current = cfiRange;
+        try {
+          const ctx = (sel?.anchorNode?.parentElement?.textContent ?? "").trim();
+          selCtxRef.current = ctx.length > 240 ? ctx.slice(0, 240) : ctx;
+        } catch {
+          selCtxRef.current = "";
+        }
       });
 
       rendition.on("relocated", (loc: EpubLocation) => {
@@ -191,9 +215,24 @@ export default function Reader({ id }: { id: string }) {
         saveProgress(cfi, pct > 0 ? pct : 0);
       });
 
-      await rendition.display(b.position || undefined);
+      // 从笔记本跳转：location.hash 带 cfi 时优先
+      const hash = typeof window !== "undefined" ? decodeURIComponent(window.location.hash.slice(1)) : "";
+      const target = hash.startsWith("epubcfi") ? hash : b.position || undefined;
+      await rendition.display(target);
       // locations 用于精确百分比，后台生成
       eb.locations.generate(600).catch(() => {});
+
+      // 重绘已有划线
+      try {
+        const { data: hls } = await supabase
+          .from("inkshelf_highlights")
+          .select("cfi")
+          .eq("book_id", b.id)
+          .not("cfi", "is", null);
+        for (const h of (hls ?? []) as { cfi: string }[]) applyAnnotation(h.cfi);
+      } catch {
+        /* 划线重绘失败不影响阅读 */
+      }
 
       // 目录：epub 导航树拍平两层
       try {
@@ -218,6 +257,7 @@ export default function Reader({ id }: { id: string }) {
       pdfTaskRef.current = task;
       const doc = (await task.promise) as PdfDoc;
       pdfDocRef.current = doc;
+      if (localStorage.getItem("inkshelf-surface") === "night") setSurface("night");
       const startPage = Math.min(Math.max(parseInt(b.position || "1", 10) || 1, 1), doc.numPages);
       pdfPageRef.current = startPage;
       await renderPdfPage(startPage);
@@ -333,6 +373,86 @@ export default function Reader({ id }: { id: string }) {
       /* 下个 flush 周期重试 */
     }
   }, [id]);
+
+  /* 在 epub 上画高亮 */
+  function applyAnnotation(cfi: string) {
+    try {
+      renditionRef.current?.annotations.add("highlight", cfi, {}, undefined, "ink-hl", {
+        fill: "#ffe58a",
+        "fill-opacity": "0.4",
+        "mix-blend-mode": "multiply",
+      });
+    } catch {
+      /* 某些 cfi 当前不在视图内，epub 会在翻到时重绘 */
+    }
+  }
+
+  async function saveHighlight(withNote: boolean) {
+    if (book?.format !== "epub" || !selCfiRef.current || !uidRef.current) {
+      setSelText("");
+      return;
+    }
+    const quote = selText;
+    const cfi = selCfiRef.current;
+    let note: string | null = null;
+    if (withNote) {
+      const n = window.prompt(t("note_prompt"));
+      if (n === null) return; // 取消
+      note = n.trim() || null;
+    }
+    setSelText("");
+    const { error } = await supabase.from("inkshelf_highlights").insert({
+      owner: uidRef.current,
+      book_id: id,
+      cfi,
+      quote,
+      color: "yellow",
+      note,
+    });
+    if (error) {
+      setRToast(error.message);
+    } else {
+      applyAnnotation(cfi);
+      setRToast(note ? t("note") : t("hl_saved"));
+    }
+    setTimeout(() => setRToast(null), 2000);
+  }
+
+  async function saveVocab() {
+    if (!uidRef.current) {
+      setSelText("");
+      return;
+    }
+    const term = selText.trim();
+    const context = selCtxRef.current;
+    setSelText("");
+    setRToast(t("translating"));
+    let translation = "";
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      const resp = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token ?? ""}` },
+        body: JSON.stringify({ term, context, target: locale }),
+      });
+      if (resp.ok) {
+        const j = (await resp.json()) as { translation?: string };
+        translation = (j.translation ?? "").trim();
+      }
+    } catch {
+      /* 翻译失败也照常存词，译文留空 */
+    }
+    await supabase.from("inkshelf_vocab").insert({
+      owner: uidRef.current,
+      book_id: id,
+      term,
+      translation: translation || null,
+      context: context || null,
+    });
+    setRToast(t("vocab_saved"));
+    setTimeout(() => setRToast(null), 2000);
+  }
 
   function jumpTo(target: string) {
     lastActRef.current = Date.now();
@@ -604,11 +724,13 @@ export default function Reader({ id }: { id: string }) {
     const i = Math.min(Math.max(idx, 0), FONT_STEPS.length - 1);
     setFontIdx(i);
     renditionRef.current?.themes.fontSize(`${FONT_STEPS[i]}%`);
+    try { localStorage.setItem("inkshelf-font", String(i)); } catch {}
   }
   function toggleSurface() {
     const next = surface === "paper" ? "night" : "paper";
     setSurface(next);
     renditionRef.current?.themes.select(next);
+    try { localStorage.setItem("inkshelf-surface", next); } catch {}
   }
 
   return (
@@ -636,7 +758,6 @@ export default function Reader({ id }: { id: string }) {
           </button>
           <button onClick={() => setAiOpen((v) => !v)} aria-expanded={aiOpen}>{t("ai")}</button>
           <button onClick={toggleSurface}>{surface === "paper" ? t("night") : t("paper")}</button>
-          <LangSwitch compact />
         </div>
       </div>
 
@@ -701,7 +822,10 @@ export default function Reader({ id }: { id: string }) {
 
         {selText && (
         <div className="sel-actions" role="toolbar" aria-label="选段操作">
-          <span className="sel-quote">「{selText.slice(0, 40)}{selText.length > 40 ? "…" : ""}」</span>
+          <span className="sel-quote">「{selText.slice(0, 32)}{selText.length > 32 ? "…" : ""}」</span>
+          <button onClick={() => saveHighlight(false)}>{t("hl")}</button>
+          <button onClick={() => saveHighlight(true)}>{t("note")}</button>
+          <button onClick={saveVocab}>{t("vocab_save")}</button>
           <button onClick={() => quickAsk("explain")}>{t("explain")}</button>
           <button onClick={() => quickAsk("translate")}>{t("translate")}</button>
           <button onClick={() => quickAsk("ask")}>{t("ask_ai")}</button>
@@ -761,6 +885,8 @@ export default function Reader({ id }: { id: string }) {
         </aside>
       )}
       </div>
+
+      {rToast && <div className="toast">{rToast}</div>}
 
       <div className="reader-foot">
         <span>{pageInfo}</span>
