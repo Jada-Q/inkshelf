@@ -14,17 +14,26 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#ffffff",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f4f4f2" },
+    { media: "(prefers-color-scheme: dark)", color: "#141310" },
+  ],
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
 };
+
+// 防白闪：绘制前依据 localStorage 设 data-theme（system 则不设，交给 prefers-color-scheme）
+const themeInit = `(function(){try{var t=localStorage.getItem('inkshelf-theme');if(t==='dark'||t==='light')document.documentElement.dataset.theme=t;}catch(e){}})();`;
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInit }} />
+      </head>
       <body>
         <LocaleProvider>{children}</LocaleProvider>
       </body>

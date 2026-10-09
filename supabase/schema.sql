@@ -82,7 +82,7 @@ create table if not exists public.inkshelf_vocab (
   id uuid primary key default gen_random_uuid(),
   owner uuid not null default auth.uid() references auth.users(id) on delete cascade,
   book_id uuid references public.inkshelf_books(id) on delete set null,
-  term text not null, translation text, context text,
+  term text not null, translation text, reading text, context text,
   created_at timestamptz not null default now()
 );
 alter table public.inkshelf_vocab enable row level security;

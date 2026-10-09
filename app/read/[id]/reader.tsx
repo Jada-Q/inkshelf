@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
 import { useI18n } from "@/lib/i18n";
+import { lookupWord, type DictEntry } from "@/lib/dict";
 
 const BUCKET = "inkshelf-books";
 const FONT_STEPS = [90, 100, 115, 130, 150];
@@ -20,6 +21,7 @@ type EpubRendition = {
   on(event: "selected", cb: (cfiRange: string, contents: EpubContents) => void): void;
   resize: (width?: number, height?: number) => void;
   hooks: { content: { register: (fn: (contents: EpubContents) => void) => void } };
+  getContents: () => EpubContents[];
   annotations: {
     add: (type: string, cfiRange: string, data?: object, cb?: () => void, className?: string, styles?: object) => void;
     remove: (cfiRange: string, type: string) => void;
@@ -59,7 +61,7 @@ type TocEntry = { label: string; target: string; depth: number };
 
 export default function Reader({ id }: { id: string }) {
   const router = useRouter();
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
 
   const [book, setBook] = useState<Book | null>(null);
   const [err, setErr] = useState("");
@@ -77,17 +79,29 @@ export default function Reader({ id }: { id: string }) {
   const selCtxRef = useRef<string>("");
   const [selPos, setSelPos] = useState<{ x: number; y: number } | null>(null);
   const [rToast, setRToast] = useState<string | null>(null);
+  const [isTouch, setIsTouch] = useState(false);
+  const touchStartRef = useRef<{ x: number; y: number; t: number }>({ x: 0, y: 0, t: 0 });
+  /* 进入即静默：chromeOff=true 时隐藏顶/底栏与翻页键，只剩正文 */
+  const [chromeOff, setChromeOff] = useState(false);
+  const chromeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /* ── M2: AI 伴读 + 朗读 ── */
+  useEffect(() => {
+    // 触屏能力只能在挂载后(客户端)测，SSR 无 window
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsTouch(
+      (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) ||
+        "ontouchstart" in window
+    );
+  }, []);
+
+
+  /* ── M2: 点词翻译 + 朗读 ── */
   const [selText, setSelText] = useState("");
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiMsgs, setAiMsgs] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [aiInput, setAiInput] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
+  const [dictHit, setDictHit] = useState<DictEntry | null>(null);
   const [speaking, setSpeaking] = useState(false);
   const speakAliveRef = useRef(false);
-  const aiMsgsRef = useRef<HTMLDivElement>(null);
 
+  const marksObsRef = useRef<MutationObserver | null>(null);
   const epubViewRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
   const renditionRef = useRef<EpubRendition | null>(null);
@@ -105,20 +119,128 @@ export default function Reader({ id }: { id: string }) {
   const sitIdRef = useRef<string | null>(null);
   const flushBaseRef = useRef(0); // 上次落库时的秒数
 
-  /* debounced progress save */
+  /* debounced progress save.
+     pct 传 null = 只存位置、不动已存百分比（epub locations 还没生成时 pct=0，
+     若写进去会把真实进度清零——这里保护它）。 */
   const saveProgress = useCallback(
-    (position: string, pct: number) => {
+    (position: string, pct: number | null) => {
       setSaved(false);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
-        const { error } = await supabase
-          .from("inkshelf_books")
-          .update({ position, percent: pct, updated_at: new Date().toISOString() })
-          .eq("id", id);
+        const patch: { position: string; updated_at: string; percent?: number } =
+          pct == null
+            ? { position, updated_at: new Date().toISOString() }
+            : { position, percent: pct, updated_at: new Date().toISOString() };
+        const { error } = await supabase.from("inkshelf_books").update(patch).eq("id", id);
         if (!error) setSaved(true);
       }, 1200);
     },
     [id]
+  );
+
+  /* 浮条定位 + 填充选区信息（桌面拖选 & 触屏点词共用）*/
+  const presentRange = useCallback((range: Range, cfi: string, text: string) => {
+    try {
+      const ir = epubViewRef.current?.querySelector("iframe")?.getBoundingClientRect();
+      const rr = range.getBoundingClientRect();
+      if (ir) {
+        const vw = window.innerWidth;
+        const half = Math.min(180, vw * 0.45);
+        const x = vw <= 560 ? vw / 2 : Math.max(half, Math.min(vw - half, ir.left + rr.left + rr.width / 2));
+        let y = ir.top + rr.bottom + 10;
+        if (y > window.innerHeight - 70) y = Math.max(8, ir.top + rr.top - 46);
+        setSelPos({ x, y });
+      } else {
+        setSelPos(null);
+      }
+    } catch {
+      setSelPos(null);
+    }
+    setSelText(text);
+    selCfiRef.current = cfi;
+    try {
+      const el = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : (range.startContainer as Element);
+      const ctx = (el?.textContent ?? "").trim();
+      selCtxRef.current = ctx.length > 240 ? ctx.slice(0, 240) : ctx;
+    } catch {
+      selCtxRef.current = "";
+    }
+  }, []);
+
+  /* 触屏：在主文档上盖一层透明触摸层（iframe 内的 touch 事件在 iOS 不稳定）→
+     滑动翻页 or 点一个词选取（绕开 iOS 原生文字菜单）*/
+  const pickWordFromPoint = useCallback(
+    (clientX: number, clientY: number): boolean => {
+      const rend = renditionRef.current;
+      const iframe = epubViewRef.current?.querySelector("iframe");
+      const idoc = iframe?.contentDocument as
+        | (Document & {
+            caretRangeFromPoint?: (x: number, y: number) => Range | null;
+            caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+          })
+        | undefined;
+      if (!rend || !iframe || !idoc) return false;
+      const ir = iframe.getBoundingClientRect();
+      const lx = clientX - ir.left;
+      const ly = clientY - ir.top;
+      let base: Range | null = null;
+      if (idoc.caretRangeFromPoint) base = idoc.caretRangeFromPoint(lx, ly);
+      else if (idoc.caretPositionFromPoint) {
+        const pos = idoc.caretPositionFromPoint(lx, ly);
+        if (pos) { base = idoc.createRange(); base.setStart(pos.offsetNode, pos.offset); base.collapse(true); }
+      }
+      if (!base) return false;
+      const node = base.startContainer;
+      if (node.nodeType !== 3 || !node.textContent) return false;
+      const tt = node.textContent;
+      const isW = (c: string) => !!c && !/\s/.test(c);
+      let s = base.startOffset, e = base.startOffset;
+      while (s > 0 && isW(tt[s - 1])) s--;
+      while (e < tt.length && isW(tt[e])) e++;
+      if (e <= s) return false;
+      const wr = idoc.createRange();
+      wr.setStart(node, s); wr.setEnd(node, e);
+      const word = tt.slice(s, e).trim();
+      if (!word) return false;
+      let cfi = "";
+      try { cfi = rend.getContents()[0]?.cfiFromRange(wr) ?? ""; } catch {}
+      presentRange(wr, cfi, word);
+      return true;
+    },
+    [presentRange]
+  );
+
+  /* chrome 显隐控制 */
+  const scheduleHide = useCallback(() => {
+    if (chromeTimerRef.current) clearTimeout(chromeTimerRef.current);
+    chromeTimerRef.current = setTimeout(() => setChromeOff(true), 3500);
+  }, []);
+  const revealChrome = useCallback(() => {
+    setChromeOff(false);
+    scheduleHide();
+  }, [scheduleHide]);
+  const toggleChrome = useCallback(() => {
+    if (chromeTimerRef.current) clearTimeout(chromeTimerRef.current);
+    setChromeOff((o) => !o);
+  }, []);
+
+  const onLayerStart = useCallback((ev: React.TouchEvent) => {
+    const t0 = ev.touches[0];
+    touchStartRef.current = { x: t0.clientX, y: t0.clientY, t: Date.now() };
+  }, []);
+
+  const onLayerEnd = useCallback(
+    (ev: React.TouchEvent) => {
+      // 轻点：命中词→选词；没命中（点空白）→ 切换 chrome 显隐。滑动交给 reader-stage 翻页。
+      const t0 = ev.changedTouches[0];
+      const { x, y, t } = touchStartRef.current;
+      const dx = t0.clientX - x, dy = t0.clientY - y;
+      if (Math.abs(dx) < 12 && Math.abs(dy) < 12 && Date.now() - t < 600) {
+        const hit = pickWordFromPoint(t0.clientX, t0.clientY);
+        if (!hit) toggleChrome();
+      }
+    },
+    [pickWordFromPoint, toggleChrome]
   );
 
   /* load book row + file, mount the right engine */
@@ -176,18 +298,25 @@ export default function Reader({ id }: { id: string }) {
         allowScriptedContent: false,
       });
       renditionRef.current = rendition;
-      // 触屏设备：禁用原生选区（iOS 的文字编辑菜单无法用 CSS 关掉）→ 改用「点词选取」
-      const isTouch =
+      // 监听标注层变化（翻页重绘 / 新增划线）→ 把 underline 改画成波浪线
+      if (epubViewRef.current && typeof MutationObserver !== "undefined") {
+        marksObsRef.current?.disconnect();
+        const obs = new MutationObserver(() => wavifyMarks());
+        obs.observe(epubViewRef.current, { childList: true, subtree: true });
+        marksObsRef.current = obs;
+      }
+      // 触屏设备：禁用原生选区（iOS 的文字编辑菜单无法用 CSS 关掉）→ 改用透明触摸层「点词选取」
+      const touchDevice =
         typeof window !== "undefined" &&
         ((window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || "ontouchstart" in window);
-      const selCss: Record<string, string> = isTouch
+      const selCss: Record<string, string> = touchDevice
         ? { "-webkit-user-select": "none", "user-select": "none", "-webkit-touch-callout": "none" }
         : { "-webkit-user-select": "text", "user-select": "text" };
       rendition.themes.register("paper", {
         body: { background: "#ffffff", color: "#37352f", "line-height": "1.85", ...selCss },
       });
       rendition.themes.register("night", {
-        body: { background: "#191919", color: "#d3d1cb", "line-height": "1.85", ...selCss },
+        body: { background: "#15120e", color: "#ece4d6", "line-height": "1.85", ...selCss },
       });
       // 应用持久化的阅读偏好（字号 / 夜间）
       const storedSurf = localStorage.getItem("inkshelf-surface") === "night" ? "night" : "paper";
@@ -198,106 +327,21 @@ export default function Reader({ id }: { id: string }) {
       setSurface(storedSurf);
       setFontIdx(storedFont);
 
-      // 浮条定位 + 填充选区信息
-      const presentSelection = (range: Range, contents: EpubContents, text: string) => {
-        let cfi = "";
-        try { cfi = contents.cfiFromRange(range); } catch {}
-        try {
-          const ir = epubViewRef.current?.querySelector("iframe")?.getBoundingClientRect();
-          const rr = range.getBoundingClientRect();
-          if (ir) {
-            const vw = window.innerWidth;
-            const half = Math.min(180, vw * 0.45);
-            const x = vw <= 560 ? vw / 2 : Math.max(half, Math.min(vw - half, ir.left + rr.left + rr.width / 2));
-            let y = ir.top + rr.bottom + 10;
-            if (y > window.innerHeight - 70) y = Math.max(8, ir.top + rr.top - 46);
-            setSelPos({ x, y });
-          } else {
-            setSelPos(null);
-          }
-        } catch {
-          setSelPos(null);
-        }
-        setSelText(text);
-        selCfiRef.current = cfi;
-        try {
-          const el = range.startContainer.nodeType === 3 ? range.startContainer.parentElement : (range.startContainer as Element);
-          const ctx = (el?.textContent ?? "").trim();
-          selCtxRef.current = ctx.length > 240 ? ctx.slice(0, 240) : ctx;
-        } catch {
-          selCtxRef.current = "";
-        }
-      };
-
-      // 桌面：拖选 → 浮条
+      // 桌面：拖选 → 浮条（触屏走组件级的透明触摸层，见 onLayerEnd/pickWordFromPoint）
       const captureSelection = (contents: EpubContents) => {
         const sel = contents.window.getSelection();
         if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
         const text = sel.toString().trim();
         if (!text) return;
-        presentSelection(sel.getRangeAt(0), contents, text);
+        const range = sel.getRangeAt(0);
+        let cfi = "";
+        try { cfi = contents.cfiFromRange(range); } catch {}
+        presentRange(range, cfi, text);
       };
-
-      // 触屏：点一个词 → 选取并弹浮条（绕开 iOS 原生选区菜单）
-      type CaretDoc = Document & {
-        caretRangeFromPoint?: (x: number, y: number) => Range | null;
-        caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-      };
-      const pickWordAt = (contents: EpubContents, x: number, y: number) => {
-        const doc = contents.document as CaretDoc;
-        let base: Range | null = null;
-        if (doc.caretRangeFromPoint) base = doc.caretRangeFromPoint(x, y);
-        else if (doc.caretPositionFromPoint) {
-          const pos = doc.caretPositionFromPoint(x, y);
-          if (pos) { base = doc.createRange(); base.setStart(pos.offsetNode, pos.offset); base.collapse(true); }
-        }
-        if (!base) return;
-        const node = base.startContainer;
-        if (node.nodeType !== 3 || !node.textContent) return;
-        const tt = node.textContent;
-        const isW = (c: string) => !!c && !/\s/.test(c);
-        let s = base.startOffset, e = base.startOffset;
-        while (s > 0 && isW(tt[s - 1])) s--;
-        while (e < tt.length && isW(tt[e])) e++;
-        if (e <= s) return;
-        const wr = doc.createRange();
-        wr.setStart(node, s); wr.setEnd(node, e);
-        const word = tt.slice(s, e).trim();
-        if (!word) return;
-        presentSelection(wr, contents, word);
-      };
-
       rendition.hooks.content.register((contents: EpubContents) => {
         const doc = contents.document;
         doc.addEventListener("contextmenu", (ev: Event) => ev.preventDefault());
-        if (isTouch) {
-          // 触屏：滑动翻页 or 点词选取（二选一，按位移区分）
-          let sx = 0, sy = 0, stime = 0;
-          doc.addEventListener(
-            "touchstart",
-            (ev: Event) => {
-              const te = ev as TouchEvent;
-              sx = te.touches[0].clientX; sy = te.touches[0].clientY; stime = Date.now();
-            },
-            { passive: true }
-          );
-          doc.addEventListener(
-            "touchend",
-            (ev: Event) => {
-              const te = ev as TouchEvent;
-              const t2 = te.changedTouches[0];
-              const dx = t2.clientX - sx, dy = t2.clientY - sy;
-              if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) {
-                lastActRef.current = Date.now();
-                if (dx < 0) renditionRef.current?.next();
-                else renditionRef.current?.prev();
-              } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && Date.now() - stime < 500) {
-                pickWordAt(contents, t2.clientX, t2.clientY);
-              }
-            },
-            { passive: true }
-          );
-        } else {
+        if (!touchDevice) {
           const h = () => captureSelection(contents);
           doc.addEventListener("mouseup", h);
           doc.addEventListener("dblclick", () => setTimeout(h, 0));
@@ -305,7 +349,7 @@ export default function Reader({ id }: { id: string }) {
           doc.addEventListener("selectionchange", () => { clearTimeout(st); st = setTimeout(h, 350); });
         }
       });
-      rendition.on("selected", (_cfi: string, contents: EpubContents) => { if (!isTouch) captureSelection(contents); });
+      rendition.on("selected", (_cfi: string, contents: EpubContents) => { if (!touchDevice) captureSelection(contents); });
 
       rendition.on("relocated", (loc: EpubLocation) => {
         const cfi = loc.start.cfi;
@@ -315,7 +359,8 @@ export default function Reader({ id }: { id: string }) {
         }
         if (pct > 0) setPercent(pct);
         setPageInfo("");
-        saveProgress(cfi, pct > 0 ? pct : 0);
+        saveProgress(cfi, pct > 0 ? pct : null); // locations 未就绪时别用 0 覆盖真实进度
+        wavifyMarks();
       });
 
       // 从笔记本跳转：location.hash 带 cfi 时优先
@@ -333,6 +378,7 @@ export default function Reader({ id }: { id: string }) {
           .eq("book_id", b.id)
           .not("cfi", "is", null);
         for (const h of (hls ?? []) as { cfi: string }[]) applyAnnotation(h.cfi);
+        wavifyMarks();
       } catch {
         /* 划线重绘失败不影响阅读 */
       }
@@ -395,6 +441,7 @@ export default function Reader({ id }: { id: string }) {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       speakAliveRef.current = false;
       if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+      marksObsRef.current?.disconnect();
       renditionRef.current?.destroy();
       epubBookRef.current?.destroy();
       pdfTaskRef.current?.destroy().catch(() => {});
@@ -477,17 +524,53 @@ export default function Reader({ id }: { id: string }) {
     }
   }, [id]);
 
-  /* 在 epub 上画高亮 */
+  /* 在 epub 上画划线 */
   function applyAnnotation(cfi: string) {
     try {
-      renditionRef.current?.annotations.add("highlight", cfi, {}, undefined, "ink-hl", {
-        fill: "#ffe58a",
-        "fill-opacity": "0.4",
-        "mix-blend-mode": "multiply",
+      // epub.js underline 标注给我们 rect+line；wavifyMarks 再把它改成波浪线
+      renditionRef.current?.annotations.add("underline", cfi, {}, undefined, "ink-ul", {
+        stroke: "#d9a441",
       });
     } catch {
       /* 某些 cfi 当前不在视图内，epub 会在翻到时重绘 */
     }
+  }
+
+  /* 把 epub.js 的 underline 标注（方框 rect + 直线 line）改画成波浪下划线。
+     epub 每次翻页会重绘标注层，所以靠 MutationObserver 每次重贴（见 mountEpub）。 */
+  function wavifyMarks() {
+    const root = epubViewRef.current;
+    if (!root) return;
+    root.querySelectorAll<SVGGElement>("svg g.ink-ul").forEach((g) => {
+      g.querySelectorAll("rect").forEach((r) => r.setAttribute("stroke", "none")); // 杀掉方框
+      g.querySelectorAll<SVGLineElement>("line").forEach((line) => {
+        if (line.dataset.wavy) return;
+        const x1 = parseFloat(line.getAttribute("x1") || "0");
+        const x2 = parseFloat(line.getAttribute("x2") || "0");
+        const y = parseFloat(line.getAttribute("y2") || line.getAttribute("y1") || "0");
+        if (x2 <= x1) return;
+        const amp = 1.5;
+        const wl = 6;
+        let d = `M ${x1} ${y}`;
+        let up = true;
+        for (let x = x1; x < x2; x += wl) {
+          const ex = Math.min(x + wl, x2);
+          const mx = (x + ex) / 2;
+          d += ` Q ${mx} ${up ? y - amp : y + amp} ${ex} ${y}`;
+          up = !up;
+        }
+        const ns = "http://www.w3.org/2000/svg";
+        const path = document.createElementNS(ns, "path");
+        path.setAttribute("d", d);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", "#d9a441");
+        path.setAttribute("stroke-width", "1.4");
+        path.setAttribute("stroke-linecap", "round");
+        g.appendChild(path);
+        line.dataset.wavy = "1";
+        line.setAttribute("stroke", "none"); // 隐藏原直线
+      });
+    });
   }
 
   async function saveHighlight(withNote: boolean) {
@@ -521,42 +604,6 @@ export default function Reader({ id }: { id: string }) {
     setTimeout(() => setRToast(null), 2000);
   }
 
-  async function saveVocab() {
-    if (!uidRef.current) {
-      setSelText("");
-      return;
-    }
-    const term = selText.trim();
-    const context = selCtxRef.current;
-    setSelText("");
-    setRToast(t("translating"));
-    let translation = "";
-    try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      const resp = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token ?? ""}` },
-        body: JSON.stringify({ term, context, target: locale }),
-      });
-      if (resp.ok) {
-        const j = (await resp.json()) as { translation?: string };
-        translation = (j.translation ?? "").trim();
-      }
-    } catch {
-      /* 翻译失败也照常存词，译文留空 */
-    }
-    await supabase.from("inkshelf_vocab").insert({
-      owner: uidRef.current,
-      book_id: id,
-      term,
-      translation: translation || null,
-      context: context || null,
-    });
-    setRToast(t("vocab_saved"));
-    setTimeout(() => setRToast(null), 2000);
-  }
-
   function jumpTo(target: string) {
     lastActRef.current = Date.now();
     setTocOpen(false);
@@ -569,72 +616,49 @@ export default function Reader({ id }: { id: string }) {
     }
   }
 
-  /* ── AI 伴读 ── */
-  const streamAI = useCallback(
-    async (userContent: string) => {
-      setAiOpen(true);
-      setAiBusy(true);
-      const base = [...aiMsgs, { role: "user" as const, content: userContent }];
-      setAiMsgs([...base, { role: "assistant", content: "…" }]);
-      try {
-        const { data } = await supabase.auth.getSession();
-        const token = data.session?.access_token;
-        const resp = await fetch("/api/ai", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token ?? ""}`,
-          },
-          body: JSON.stringify({
-            bookTitle: book?.title,
-            author: book?.author,
-            locale,
-            messages: base,
-          }),
-        });
-        if (!resp.ok || !resp.body) {
-          setAiMsgs([...base, { role: "assistant", content: `出错了（HTTP ${resp.status}），请重试` }]);
-          return;
-        }
-        const reader = resp.body.getReader();
-        const dec = new TextDecoder();
-        let acc = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          acc += dec.decode(value, { stream: true });
-          setAiMsgs([...base, { role: "assistant", content: acc }]);
-        }
-        if (!acc) {
-          setAiMsgs([
-            ...base,
-            { role: "assistant", content: "AI 服务没有返回内容——通常是 AI Gateway 的额度/绑卡问题，去 Vercel 控制台 AI 页检查后重试。" },
-          ]);
-        }
-      } catch {
-        setAiMsgs([...base, { role: "assistant", content: "网络出错，请重试" }]);
-      } finally {
-        setAiBusy(false);
-      }
-    },
-    [aiMsgs, book?.title, book?.author, locale]
-  );
-
-  function quickAsk(kind: "explain" | "translate" | "ask") {
-    const quote = selText;
-    if (!quote) return;
+  /* 从词典气泡直接存生词库（已有释义+音标，不调任何 API） */
+  async function saveVocabDict() {
+    const hit = dictHit;
+    const term = selText.trim();
+    const context = selCtxRef.current;
     setSelText("");
-    if (kind === "ask") {
-      setAiOpen(true);
-      setAiInput(`关于这段：「${quote.slice(0, 120)}${quote.length > 120 ? "…" : ""}」 `);
+    if (!uidRef.current || !hit) return;
+    await supabase.from("inkshelf_vocab").insert({
+      owner: uidRef.current,
+      book_id: id,
+      term,
+      translation: hit.tr || null,
+      reading: hit.phonetic || null,
+      context: context || null,
+    });
+    setRToast(t("vocab_saved"));
+    setTimeout(() => setRToast(null), 2000);
+  }
+
+  function speakWordNow(word: string) {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const u = new SpeechSynthesisUtterance(word);
+    u.lang = "en-US";
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  }
+
+  /* 选中单个英文词 → 查离线词典，即时弹中文释义（脱离 LLM） */
+  useEffect(() => {
+    const w = selText.trim();
+    if (!w || /\s/.test(w) || !/[A-Za-z]/.test(w)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDictHit(null);
       return;
     }
-    const instruction =
-      kind === "explain"
-        ? "解释这段内容（含必要的背景和它在本书语境中的意思）："
-        : "翻译这段（原文非中文则译成中文；原文是中文则译成英文）：";
-    streamAI(`${instruction}\n\n${quote}`);
-  }
+    let alive = true;
+    lookupWord(w).then((e) => {
+      if (alive) setDictHit(e);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [selText]);
 
   async function pdfCurrentPageText(): Promise<string> {
     const doc = pdfDocRef.current;
@@ -642,15 +666,6 @@ export default function Reader({ id }: { id: string }) {
     const page = await doc.getPage(pdfPageRef.current);
     const tc = await page.getTextContent();
     return tc.items.map((i) => i.str ?? "").join(" ").trim();
-  }
-
-  async function askAboutPdfPage() {
-    const text = await pdfCurrentPageText();
-    if (!text) {
-      streamAI("这一页提取不到文字（可能是扫描版 PDF），请告诉读者这种页面暂时无法讲解。");
-      return;
-    }
-    streamAI(`讲解这一页的内容（P.${pdfPageRef.current}）：\n\n${text.slice(0, 6000)}`);
   }
 
   /* ── 朗读（浏览器 speechSynthesis）── */
@@ -728,42 +743,6 @@ export default function Reader({ id }: { id: string }) {
     setSelText("");
   }
 
-  /* ── 语音提问（webkitSpeechRecognition，按浏览器支持情况显示）── */
-  type SR = { lang: string; onresult: (e: { results: { 0: { 0: { transcript: string } } } }) => void; onend: () => void; start: () => void };
-  const srCtor = (typeof window !== "undefined"
-    ? (window as unknown as { webkitSpeechRecognition?: new () => SR }).webkitSpeechRecognition
-    : undefined);
-  const [listening, setListening] = useState(false);
-  function startDictation() {
-    if (!srCtor) return;
-    const rec = new srCtor();
-    rec.lang = "zh-CN";
-    rec.onresult = (e) => setAiInput((v) => v + e.results[0][0].transcript);
-    rec.onend = () => setListening(false);
-    setListening(true);
-    rec.start();
-  }
-
-  useEffect(() => {
-    aiMsgsRef.current?.scrollTo({ top: aiMsgsRef.current.scrollHeight });
-  }, [aiMsgs]);
-
-  /* AI 面板开合会改变正文宽度 → 让 epub/pdf 重排，避免被遮挡 */
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (book?.format === "epub") {
-        const el = epubViewRef.current;
-        if (el && renditionRef.current?.resize) {
-          renditionRef.current.resize(el.clientWidth, el.clientHeight);
-        }
-      } else if (pdfDocRef.current) {
-        renderPdfPage(pdfPageRef.current);
-      }
-    }, 80);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiOpen]);
-
   /* 触屏滑动翻页 */
   const touchX = useRef<number | null>(null);
   function onTouchStart(e: React.TouchEvent) {
@@ -785,6 +764,26 @@ export default function Reader({ id }: { id: string }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [go]);
+
+  /* 进入后桌面端自动静默；窗口缩放时 epub 重排（窄栏会随宽度变化） */
+  useEffect(() => {
+    if (!book) return;
+    if (!isTouch) scheduleHide();
+    const onResize = () => {
+      if (book.format === "epub") {
+        const el = epubViewRef.current;
+        if (el && renditionRef.current?.resize) renditionRef.current.resize(el.clientWidth, el.clientHeight);
+      } else if (pdfDocRef.current) {
+        renderPdfPage(pdfPageRef.current);
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (chromeTimerRef.current) clearTimeout(chromeTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book, isTouch, scheduleHide]);
 
   /* 读书计时主循环：每秒判定是否在真实阅读，每 20 秒落库 */
   useEffect(() => {
@@ -834,8 +833,10 @@ export default function Reader({ id }: { id: string }) {
     try { localStorage.setItem("inkshelf-surface", next); } catch {}
   }
 
+  const chromeHidden = chromeOff && !tocOpen && !selText;
+
   return (
-    <div className="reader-shell">
+    <div className={`reader-shell ${surface}${chromeHidden ? " chrome-off" : ""}`}>
       <div className="reader-top">
         <Link href="/" className="btn" style={{ textDecoration: "none", flexShrink: 0 }}>
           {t("back")}
@@ -851,19 +852,20 @@ export default function Reader({ id }: { id: string }) {
               <button onClick={() => setFont(fontIdx + 1)} aria-label="A+">A+</button>
             </>
           )}
-          {book?.format === "pdf" && (
-            <button onClick={askAboutPdfPage} disabled={aiBusy}>{t("ai_page")}</button>
-          )}
           <button onClick={speakToggle} className={speaking ? "speaking" : ""}>
             {speaking ? t("stop") : t("read_aloud")}
           </button>
-          <button onClick={() => setAiOpen((v) => !v)} aria-expanded={aiOpen}>{t("ai")}</button>
           <button onClick={toggleSurface}>{surface === "paper" ? t("night") : t("paper")}</button>
         </div>
       </div>
 
       <div className="reader-body">
-      <div className={`reader-stage ${surface}`} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <div
+        className={`reader-stage ${surface}`}
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+        onMouseMove={isTouch ? undefined : revealChrome}
+      >
         {err ? (
           <div className="center-msg">{err}</div>
         ) : !book ? (
@@ -879,6 +881,9 @@ export default function Reader({ id }: { id: string }) {
         <div className="nav-zone right" onClick={() => go(1)} aria-label="下一页" />
         <button className="nav-btn left" onClick={() => go(-1)} aria-label="上一页">‹</button>
         <button className="nav-btn right" onClick={() => go(1)} aria-label="下一页">›</button>
+        {isTouch && book?.format === "epub" && (
+          <div className="touch-layer" onTouchStart={onLayerStart} onTouchEnd={onLayerEnd} aria-hidden />
+        )}
 
         {tocOpen && (
           <>
@@ -923,73 +928,40 @@ export default function Reader({ id }: { id: string }) {
 
         {selText && (
         <div
-          className="sel-actions"
+          className={`sel-actions${dictHit ? " has-dict" : ""}`}
           role="toolbar"
           aria-label="选段操作"
           style={selPos ? { left: selPos.x, top: selPos.y, bottom: "auto", transform: "translateX(-50%)" } : undefined}
         >
-          <span className="sel-quote">「{selText.slice(0, 32)}{selText.length > 32 ? "…" : ""}」</span>
-          <button onClick={() => saveHighlight(false)}>{t("hl")}</button>
-          <button onClick={() => saveHighlight(true)}>{t("note")}</button>
-          <button onClick={saveVocab}>{t("vocab_save")}</button>
-          <button onClick={() => quickAsk("explain")}>{t("explain")}</button>
-          <button onClick={() => quickAsk("translate")}>{t("translate")}</button>
-          <button onClick={() => quickAsk("ask")}>{t("ask_ai")}</button>
-          <button onClick={speakSelection}>{t("read_aloud")}</button>
-          <button onClick={() => setSelText("")} aria-label="关闭">✕</button>
+          {dictHit ? (
+            <div className="dict-pop">
+              <div className="dict-head">
+                <span className="dict-word">{dictHit.word}</span>
+                {dictHit.phonetic && <span className="dict-ph">[{dictHit.phonetic}]</span>}
+                <button className="dict-speak" onClick={() => speakWordNow(dictHit.word)} aria-label={t("read_aloud")} title={t("read_aloud")}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z" /><path d="M16.5 8.8a4.5 4.5 0 0 1 0 6.4" /></svg>
+                </button>
+              </div>
+              <div className="dict-tr">{dictHit.tr}</div>
+              <div className="dict-acts">
+                <button className="sel-primary" onClick={saveVocabDict}>{t("vocab_save")}</button>
+                <button onClick={() => saveHighlight(false)}>{t("hl")}</button>
+                <button onClick={() => setSelText("")} aria-label="关闭">✕</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <span className="sel-quote">「{selText.slice(0, 32)}{selText.length > 32 ? "…" : ""}」</span>
+              <button onClick={() => saveHighlight(false)}>{t("hl")}</button>
+              <button onClick={() => saveHighlight(true)}>{t("note")}</button>
+              <button onClick={speakSelection}>{t("read_aloud")}</button>
+              <button onClick={() => setSelText("")} aria-label="关闭">✕</button>
+            </>
+          )}
         </div>
       )}
       </div>
 
-      {aiOpen && (
-        <aside className="ai-panel" aria-label="AI 伴读">
-          <div className="ai-head">
-            <span className="mono-label blush">{t("ai_companion")}</span>
-            <button onClick={() => setAiOpen(false)} aria-label="收起">✕</button>
-          </div>
-          <div className="ai-msgs" ref={aiMsgsRef}>
-            {aiMsgs.length === 0 && (
-              <div className="ai-hint">
-                {book?.format === "epub" ? t("ai_hint_epub") : t("ai_hint_pdf")}
-              </div>
-            )}
-            {aiMsgs.map((m, i) => (
-              <div key={i} className={`ai-msg ${m.role}`}>
-                {m.content}
-              </div>
-            ))}
-          </div>
-          <form
-            className="ai-input"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const q = aiInput.trim();
-              if (!q || aiBusy) return;
-              setAiInput("");
-              streamAI(q);
-            }}
-          >
-            <input
-              value={aiInput}
-              onChange={(e) => setAiInput(e.target.value)}
-              placeholder={t("ai_ph")}
-            />
-            {srCtor && (
-              <button
-                type="button"
-                onClick={startDictation}
-                className={listening ? "speaking" : ""}
-                aria-label={t("say")}
-              >
-                {listening ? t("listening") : t("say")}
-              </button>
-            )}
-            <button type="submit" className="primary" disabled={aiBusy}>
-              {aiBusy ? "…" : t("send")}
-            </button>
-          </form>
-        </aside>
-      )}
       </div>
 
       {rToast && <div className="toast">{rToast}</div>}

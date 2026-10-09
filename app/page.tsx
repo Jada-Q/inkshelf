@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
 import { useI18n, LangSwitch } from "@/lib/i18n";
+import { ThemeToggle } from "@/lib/theme";
 
 const BUCKET = "inkshelf-books";
 const STATUS_NEXT: Record<Book["status"], Book["status"]> = {
@@ -33,6 +34,22 @@ export default function ShelfPage() {
   const [dragOver, setDragOver] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [sideOpen, setSideOpen] = useState(false);
+  const [vocabCount, setVocabCount] = useState(0);
+  const [weekSecs, setWeekSecs] = useState(0);
+
+  const loadStats = useCallback(async () => {
+    const since = new Date(Date.now() - 7 * 86400000).toISOString();
+    const [sessRes, vocabRes] = await Promise.all([
+      supabase.from("inkshelf_sessions").select("seconds").gte("started_at", since),
+      supabase.from("inkshelf_vocab").select("id", { count: "exact", head: true }),
+    ]);
+    const secs = (sessRes.data ?? []).reduce(
+      (a, r: { seconds: number | null }) => a + (r.seconds ?? 0),
+      0
+    );
+    setWeekSecs(secs);
+    setVocabCount(vocabRes.count ?? 0);
+  }, []);
 
   const loadBooks = useCallback(async () => {
     const { data, error } = await supabase
@@ -67,8 +84,9 @@ export default function ShelfPage() {
       }
       setUid(data.session.user.id);
       loadBooks();
+      loadStats();
     });
-  }, [router, loadBooks]);
+  }, [router, loadBooks, loadStats]);
 
   async function parseEpub(buf: ArrayBuffer) {
     const ePub = (await import("epubjs")).default;
@@ -227,6 +245,7 @@ export default function ShelfPage() {
         <Link href="/stats" className="side-item">{t("nav_stats")}</Link>
         <div className="side-foot">
           <LangSwitch />
+          <ThemeToggle />
           <label className="side-item" style={{ cursor: "pointer" }}>
             {t("import")}
             <input
@@ -253,8 +272,26 @@ export default function ShelfPage() {
       </aside>
 
       <main className="main">
-        <button className="mobile-menu" onClick={() => setSideOpen(true)}>{t("menu")}</button>
-        <h1 className="page-title">{t("nav_shelf")}</h1>
+        <div className="m-topbar">
+          <div className="brand">
+            <span className="glyph">墨</span>
+            <span className="wm">{t("brand")}</span>
+          </div>
+          <button className="menu-btn" onClick={() => setSideOpen(true)} aria-label={t("menu")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+          </button>
+        </div>
+        <div className="lib-head">
+          <h1 className="page-title">{t("nav_shelf")}</h1>
+          <span className="lib-count">{books.length} {t("books_unit")}</span>
+        </div>
+
+        <div className="lib-stats">
+          <div className="lib-stat"><div className="k">{t("st_collection")}</div><div className="v">{books.length}</div></div>
+          <div className="lib-stat"><div className="k">{t("st_reading")}</div><div className="v">{books.filter((b) => b.status === "reading").length}</div></div>
+          <div className="lib-stat"><div className="k">{t("st_week")}</div><div className="v">{(weekSecs / 3600).toFixed(1)}<small>h</small></div></div>
+          <div className="lib-stat"><div className="k">{t("st_vocab")}</div><div className="v">{vocabCount}</div></div>
+        </div>
 
         <div className="view-row">
           <div className="filters">
@@ -267,58 +304,60 @@ export default function ShelfPage() {
         </div>
 
         {loaded && shown.length === 0 ? (
-          <div className={`dropzone ${dragOver ? "over" : ""}`}>
+          <label className={`dropzone ${dragOver ? "over" : ""}`} style={{ cursor: "pointer", display: "block" }}>
             <div className="big">{t("drop_big")}</div>
             <div>{t("drop_sub")}</div>
-          </div>
+            <input
+              type="file"
+              accept=".epub,.pdf"
+              multiple
+              hidden
+              onChange={(e) => {
+                if (e.target.files?.length) importFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </label>
         ) : (
-          <div className="grid">
+          <div className="lib-list">
             {shown.map((b) => (
-              <div key={b.id} className="book-card">
-                <Link href={`/read/${b.id}`} className="card-in" aria-label={b.title}>
-                  <div className="cover">
-                    {b.cover_path && covers[b.cover_path] ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={covers[b.cover_path]} alt="" />
-                    ) : (
-                      <div className="ph" style={{ background: phGradient(b.title) }}>
-                        {b.title}
-                      </div>
-                    )}
+              <Link key={b.id} href={`/read/${b.id}`} className="lib-row" aria-label={b.title}>
+                <div className="lib-thumb">
+                  {b.cover_path && covers[b.cover_path] ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={covers[b.cover_path]} alt="" />
+                  ) : (
+                    <div className="ph" style={{ background: phGradient(b.title) }}>{b.title}</div>
+                  )}
+                </div>
+                <div className="lib-main">
+                  <div className="lib-title">{b.title}</div>
+                  <div className="lib-meta">
+                    {(b.author ?? b.format.toUpperCase())} · {Math.round(b.percent * 100)}%
                   </div>
-                  <div className="card-body">
-                    <span className="card-title">{b.title}</span>
-                    <div className="card-props">
-                      <button
-                        className={`tag ${b.status}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          cycleStatus(b);
-                        }}
-                        title={t("switch_status")}
-                      >
-                        {t(b.status)}
-                      </button>
-                      <span className="pct">{Math.round(b.percent * 100)}%</span>
-                    </div>
-                    <div className="prog">
-                      <i style={{ width: `${Math.round(b.percent * 100)}%` }} />
-                    </div>
-                    <div className="card-meta">
-                      <span>{b.author ?? b.format.toUpperCase()}</span>
-                      <button
-                        className="rm"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          removeBook(b);
-                        }}
-                      >
-                        {t("remove")}
-                      </button>
-                    </div>
-                  </div>
-                </Link>
-              </div>
+                </div>
+                <div className="lib-right">
+                  <button
+                    className={`tag ${b.status}`}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      cycleStatus(b);
+                    }}
+                    title={t("switch_status")}
+                  >
+                    {t(b.status)}
+                  </button>
+                  <button
+                    className="rm"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      removeBook(b);
+                    }}
+                  >
+                    {t("remove")}
+                  </button>
+                </div>
+              </Link>
             ))}
           </div>
         )}

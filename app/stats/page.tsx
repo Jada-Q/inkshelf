@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
 import { useI18n, LangSwitch } from "@/lib/i18n";
+import { ThemeToggle } from "@/lib/theme";
 
 type Sess = { started_at: string; seconds: number };
 type Day = { key: string; date: Date; secs: number } | null;
@@ -82,6 +83,7 @@ export default function StatsPage() {
         <button className="side-item on">{t("nav_stats")}</button>
         <div className="side-foot">
           <LangSwitch />
+          <ThemeToggle />
           <button
             className="side-item"
             onClick={async () => {
@@ -95,7 +97,15 @@ export default function StatsPage() {
       </aside>
 
       <main className="main">
-        <button className="mobile-menu" onClick={() => setSideOpen(true)}>{t("menu")}</button>
+        <div className="m-topbar">
+          <div className="brand">
+            <span className="glyph">墨</span>
+            <span className="wm">{t("brand")}</span>
+          </div>
+          <button className="menu-btn" onClick={() => setSideOpen(true)} aria-label={t("menu")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M3 12h18M3 18h18" /></svg>
+          </button>
+        </div>
         <h1 className="page-title">{t("stats")}</h1>
         {!loaded ? (
           <div style={{ color: "var(--ink-3)", padding: "20px 0" }}>{t("computing")}</div>

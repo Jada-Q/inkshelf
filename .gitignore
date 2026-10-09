@@ -42,3 +42,5 @@ next-env.d.ts
 
 # project local
 implementation-notes.md
+
+.playwright-mcp/
