@@ -13,6 +13,11 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "public/**",
+    // native wrapper + scratch build dirs (not source)
+    "ios/**",
+    "android/**",
+    ".next-stale/**",
+    "out-stale/**",
   ]),
 ]);
 

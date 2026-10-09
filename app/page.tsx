@@ -6,6 +6,7 @@ import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
 import { useI18n, LangSwitch } from "@/lib/i18n";
 import { ThemeToggle } from "@/lib/theme";
+import { deleteCachedBook, deleteBookMeta } from "@/lib/bookcache";
 
 const BUCKET = "inkshelf-books";
 const STATUS_NEXT: Record<Book["status"], Book["status"]> = {
@@ -204,7 +205,11 @@ export default function ShelfPage() {
     await supabase.storage.from(BUCKET).remove(paths);
     const { error } = await supabase.from("inkshelf_books").delete().eq("id", b.id);
     if (error) setToast({ text: error.message, err: true });
-    else loadBooks();
+    else {
+      void deleteCachedBook(b.id); // 清本地离线缓存
+      deleteBookMeta(b.id);
+      loadBooks();
+    }
   }
 
   async function cycleStatus(b: Book) {

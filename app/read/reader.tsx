@@ -6,6 +6,7 @@ import Link from "next/link";
 import { supabase, type Book } from "@/lib/supabase";
 import { useI18n } from "@/lib/i18n";
 import { lookupWord, type DictEntry } from "@/lib/dict";
+import { getCachedBook, putCachedBook, putBookMeta, getBookMeta } from "@/lib/bookcache";
 
 const BUCKET = "inkshelf-books";
 const FONT_STEPS = [90, 100, 115, 130, 150];
@@ -248,37 +249,67 @@ export default function Reader({ id }: { id: string }) {
     let cancelled = false;
 
     async function boot() {
-      const { data: sess } = await supabase.auth.getSession();
-      if (!sess.session) {
+      // getSession 离线时可能卡在 token 刷新上 → 加超时，别让启动挂死
+      let session: { user: { id: string } } | null = null;
+      try {
+        session = await Promise.race([
+          supabase.auth.getSession().then((r) => r.data.session),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+        ]);
+      } catch {
+        session = null;
+      }
+      if (session) uidRef.current = session.user.id;
+      // 没登录态：有本地缓存就离线只读打开；否则去登录
+      if (!session && !getBookMeta<Book>(id)) {
         router.replace("/login");
         return;
       }
-      uidRef.current = sess.session.user.id;
       lastActRef.current = Date.now();
-      const { data, error } = await supabase.from("inkshelf_books").select("*").eq("id", id).single();
-      if (error || !data) {
+      let b: Book | null = null;
+      try {
+        const { data } = await supabase.from("inkshelf_books").select("*").eq("id", id).single();
+        if (data) {
+          b = data as Book;
+          putBookMeta(id, b); // 缓存元数据，离线时备用
+        }
+      } catch {
+        /* 离线：下面回退到缓存的元数据 */
+      }
+      if (!b) b = getBookMeta<Book>(id); // 离线回退
+      if (!b) {
         setErr(t("notfound"));
         return;
       }
-      const b = data as Book;
       if (cancelled) return;
       setBook(b);
       setPercent(b.percent);
 
-      const { data: signed, error: sErr } = await supabase.storage
-        .from(BUCKET)
-        .createSignedUrl(b.file_path, 21600);
-      if (sErr || !signed) {
-        setErr(`取书失败：${sErr?.message ?? "无签名地址"}`);
-        return;
+      // 优先用本地缓存（断网也能开）；没缓存才联网下载一次并缓存
+      let buf = await getCachedBook(b.id);
+      if (!buf) {
+        const { data: signed, error: sErr } = await supabase.storage
+          .from(BUCKET)
+          .createSignedUrl(b.file_path, 21600);
+        if (sErr || !signed) {
+          setErr(t("book_need_net"));
+          return;
+        }
+        let resp: Response;
+        try {
+          resp = await fetch(signed.signedUrl);
+        } catch {
+          setErr(t("book_need_net")); // 没缓存又离线
+          return;
+        }
+        if (!resp.ok) {
+          setErr(`下载失败：HTTP ${resp.status}`);
+          return;
+        }
+        buf = await resp.arrayBuffer();
+        if (cancelled) return;
+        void putCachedBook(b.id, buf.slice(0)); // 缓存一份副本，供下次离线打开
       }
-      const resp = await fetch(signed.signedUrl);
-      if (!resp.ok) {
-        setErr(`下载失败：HTTP ${resp.status}`);
-        return;
-      }
-      const buf = await resp.arrayBuffer();
-      if (cancelled) return;
 
       if (b.format === "epub") await mountEpub(b, buf);
       else await mountPdf(b, buf);
