@@ -150,7 +150,7 @@ export default function VocabPage() {
                 {v.translation && <div className="vocab-tr">{v.translation}</div>}
                 {v.context && <div className="vocab-ctx">{v.context}</div>}
                 {v.inkshelf_books?.title && (
-                  <Link href={`/read/${v.book_id}`} className="vocab-src">
+                  <Link href={`/read?id=${v.book_id}`} className="vocab-src">
                     {t("in_book")} 《{v.inkshelf_books.title}》
                   </Link>
                 )}

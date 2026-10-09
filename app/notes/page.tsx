@@ -139,7 +139,7 @@ export default function NotesPage() {
                 {g.items.map((h) => (
                   <div key={h.id} className="note-card">
                     <Link
-                      href={h.cfi ? `/read/${h.book_id}#${encodeURIComponent(h.cfi)}` : `/read/${h.book_id}`}
+                      href={h.cfi ? `/read?id=${h.book_id}#${encodeURIComponent(h.cfi)}` : `/read?id=${h.book_id}`}
                       className="note-quote"
                     >
                       {h.quote}

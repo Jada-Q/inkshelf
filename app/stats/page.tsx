@@ -231,7 +231,7 @@ function StatsBody({ books, dayMap }: { books: Book[]; dayMap: Record<string, nu
           {books
             .filter((b) => (b.total_seconds ?? 0) > 0)
             .map((b) => (
-              <Link key={b.id} href={`/read/${b.id}`} className="bt-row">
+              <Link key={b.id} href={`/read?id=${b.id}`} className="bt-row">
                 <span className="bt-title">{b.title}</span>
                 <span className="bt-bar">
                   <i style={{ width: `${Math.max(4, ((b.total_seconds ?? 0) / maxBook) * 100)}%` }} />

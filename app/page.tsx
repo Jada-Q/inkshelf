@@ -321,7 +321,7 @@ export default function ShelfPage() {
         ) : (
           <div className="lib-list">
             {shown.map((b) => (
-              <Link key={b.id} href={`/read/${b.id}`} className="lib-row" aria-label={b.title}>
+              <Link key={b.id} href={`/read?id=${b.id}`} className="lib-row" aria-label={b.title}>
                 <div className="lib-thumb">
                   {b.cover_path && covers[b.cover_path] ? (
                     // eslint-disable-next-line @next/next/no-img-element

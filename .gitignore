@@ -44,3 +44,7 @@ next-env.d.ts
 implementation-notes.md
 
 .playwright-mcp/
+
+# stale build dirs (renamed aside; safe to delete)
+/.next-stale/
+/out-stale/
