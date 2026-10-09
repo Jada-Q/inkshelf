@@ -519,3 +519,15 @@ button.speaking { color: var(--ai); background: var(--ai-soft); }
 }
 .side-scrim { display: none; }
 @media (max-width: 760px) { .side-scrim.show { display: block; position: fixed; inset: 0; z-index: 29; background: rgba(15,15,15,.3); } }
+
+/* ── legal pages (privacy) ── */
+.legal { max-width: 680px; margin: 0 auto; padding: 52px 22px 90px; color: var(--ink); }
+.legal h1 { font-size: 27px; font-weight: 650; letter-spacing: -.015em; margin: 0 0 6px; }
+.legal .updated { font-family: var(--mono); font-size: 11px; color: var(--ink-3); margin: 0 0 28px; }
+.legal h2 { font-size: 16px; font-weight: 650; margin: 28px 0 8px; letter-spacing: -.01em; }
+.legal p, .legal li { font-size: 14.5px; line-height: 1.75; color: var(--ink-2); }
+.legal ul { padding-left: 20px; margin: 8px 0; }
+.legal li { margin: 5px 0; }
+.legal strong { color: var(--ink); font-weight: 600; }
+.legal a { color: var(--blue); }
+.legal hr { border: none; border-top: 1px solid var(--line); margin: 36px 0 8px; }

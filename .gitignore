@@ -48,3 +48,6 @@ implementation-notes.md
 # stale build dirs (renamed aside; safe to delete)
 /.next-stale/
 /out-stale/
+
+# local export config (contains teamID only, but keep out of repo)
+ExportOptions*.plist
